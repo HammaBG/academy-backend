@@ -4,12 +4,16 @@ import helmet from 'helmet';
 import { env } from './config/env';
 import { supabase } from './config/supabase';
 import { redis } from './config/redis';
+import authRoutes from './routes/auth.routes';
 
 const app = express();
 
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+// Routes
+app.use('/api/auth', authRoutes);
 
 // Basic health check route to test Supabase and Redis
 app.get('/health', async (req: Request, res: Response) => {
