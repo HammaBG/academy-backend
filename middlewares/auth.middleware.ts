@@ -37,3 +37,18 @@ export const requireAuth = async (
     res.status(500).json({ error: 'Internal server error during authentication' });
   }
 };
+
+export const isAdmin = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const user = req.user;
+
+  if (!user || user.user_metadata?.role !== 'admin') {
+    res.status(403).json({ error: 'Forbidden: Admin access required' });
+    return;
+  }
+
+  next();
+};

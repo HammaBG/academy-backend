@@ -1,7 +1,24 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { supabase } from '../config/supabase';
+import { supabase, supabaseAdmin } from '../config/supabase';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
+
+// ... (existing schemas and controllers)
+
+export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers();
+
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+
+    res.status(200).json({ users });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+};
 
 // Validation schemas with Zod
 const signUpSchema = z.object({
