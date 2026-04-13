@@ -1,18 +1,11 @@
 import { Request, Response } from 'express';
-import { z } from 'zod';
 import { supabaseAdmin } from '../config/supabase';
 import { cloudinary } from '../config/cloudinary';
-import { upload } from '../middlewares/upload.middleware';
-
-// Validation schemas
-const createArticleSchema = z.object({
-  title: z.string().min(1, 'Title is required'),
-  content: z.string().min(1, 'Content is required'),
-  status: z.enum(['draft', 'published']).default('draft'),
-  excerpt: z.string().optional(),
-});
-
-const updateArticleSchema = createArticleSchema.partial();
+import { 
+  Article, 
+  createArticleSchema, 
+  updateArticleSchema 
+} from '../models/article.model';
 
 // Helper: upload buffer to Cloudinary
 const uploadToCloudinary = (buffer: Buffer, filename: string): Promise<string> => {
@@ -49,6 +42,7 @@ export const createArticle = async (req: Request, res: Response): Promise<void> 
       .from('articles')
       .insert({ title, content, status, excerpt, image_url })
       .select()
+      .returns<Article>()
       .single();
 
     if (error) {
@@ -63,13 +57,36 @@ export const createArticle = async (req: Request, res: Response): Promise<void> 
   }
 };
 
+// GET /api/articles/public — get only published articles (Public)
+export const getPublicArticles = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('articles')
+      .select('*')
+      .eq('status', 'published')
+      .order('created_at', { ascending: false })
+      .returns<Article[]>();
+
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+
+    res.status(200).json({ data });
+  } catch (err) {
+    console.error('Get public articles error:', err);
+    res.status(500).json({ error: 'Failed to fetch public articles' });
+  }
+};
+
 // GET /api/articles — get all articles
 export const getAllArticles = async (req: Request, res: Response): Promise<void> => {
   try {
     const { data, error } = await supabaseAdmin
       .from('articles')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .returns<Article[]>();
 
     if (error) {
       res.status(400).json({ error: error.message });
@@ -83,6 +100,31 @@ export const getAllArticles = async (req: Request, res: Response): Promise<void>
   }
 };
 
+// GET /api/articles/public/:id — get single published article (Public)
+export const getPublicArticleById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabaseAdmin
+      .from('articles')
+      .select('*')
+      .eq('id', id)
+      .eq('status', 'published')
+      .returns<Article>()
+      .single();
+
+    if (error) {
+      res.status(404).json({ error: 'Article not found or not published' });
+      return;
+    }
+
+    res.status(200).json({ data });
+  } catch (err) {
+    console.error('Get public article error:', err);
+    res.status(500).json({ error: 'Failed to fetch public article' });
+  }
+};
+
 // GET /api/articles/:id — get single article
 export const getArticleById = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -92,6 +134,7 @@ export const getArticleById = async (req: Request, res: Response): Promise<void>
       .from('articles')
       .select('*')
       .eq('id', id)
+      .returns<Article>()
       .single();
 
     if (error) {
@@ -143,6 +186,7 @@ export const updateArticle = async (req: Request, res: Response): Promise<void> 
       .update(updates)
       .eq('id', id)
       .select()
+      .returns<Article>()
       .single();
 
     if (error) {

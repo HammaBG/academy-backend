@@ -2,6 +2,8 @@ import { Router } from 'express';
 import {
   createArticle,
   getAllArticles,
+  getPublicArticles,
+  getPublicArticleById,
   getArticleById,
   updateArticle,
   deleteArticle,
@@ -13,7 +15,11 @@ const router = Router();
 
 // All article routes require auth + admin
 router.post('/', requireAuth, isAdmin, upload.single('image'), createArticle);
+router.get('/public', getPublicArticles);
+router.get('/public/:id', getPublicArticleById);
 router.get('/', requireAuth, isAdmin, getAllArticles);
+
+
 router.get('/:id', requireAuth, isAdmin, getArticleById);
 router.put('/:id', requireAuth, isAdmin, upload.single('image'), updateArticle);
 router.delete('/:id', requireAuth, isAdmin, deleteArticle);
