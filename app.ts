@@ -6,6 +6,7 @@ import { supabase } from './config/supabase';
 import { redis } from './config/redis';
 import authRoutes from './routes/auth.routes';
 import articleRoutes from './routes/article.routes';
+import categoryRoutes from './routes/category.routes';
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/articles', articleRoutes);
+app.use('/api/categories', categoryRoutes);
 
 // Basic health check route to test Supabase and Redis
 app.get('/health', async (req: Request, res: Response) => {
