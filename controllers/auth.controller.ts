@@ -104,3 +104,76 @@ export const getProfile = async (req: AuthenticatedRequest, res: Response): Prom
     user 
   });
 };
+
+import { cloudinary } from '../config/cloudinary';
+
+export const updateUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { role, title, avatar_url } = req.body;
+
+    let finalAvatarUrl = avatar_url;
+
+    // Fast check if avatar_url is Base64 image
+    if (avatar_url && avatar_url.startsWith('data:image')) {
+       const myCloud = await cloudinary.uploader.upload(avatar_url, {
+         folder: "users",
+       });
+       finalAvatarUrl = myCloud.secure_url;
+    }
+
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id as string, {
+      user_metadata: { 
+        ...(role && { role }),
+        ...(title && { title }),
+        ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
+      }
+    });
+
+    if (authError) {
+      res.status(400).json({ error: authError.message });
+      return;
+    }
+
+    // Attempt to update public users table safely
+    const updateData: any = {};
+    if (role) updateData.role = role;
+    if (title) updateData.title = title;
+    if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
+
+    if (Object.keys(updateData).length > 0) {
+      await supabaseAdmin.from('users').update(updateData).eq('id', id);
+    }
+
+    res.status(200).json({ message: 'User updated successfully', user: authData.user });
+  } catch (err) {
+    console.error("Update User Error:", err);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+};
+
+export const getPublicInstructors = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers();
+
+    if (error) {
+       res.status(400).json({ error: error.message });
+       return;
+    }
+
+    const instructors = users
+      .filter(u => u.user_metadata?.role === 'instructor')
+      .map(u => ({
+        id: u.id,
+        first_name: u.user_metadata?.first_name || '',
+        last_name: u.user_metadata?.last_name || '',
+        avatar_url: u.user_metadata?.avatar_url || '',
+        title: u.user_metadata?.title || ''
+      }));
+
+    res.status(200).json({ instructors });
+  } catch (err) {
+    console.error("Fetch Instructors Error:", err);
+    res.status(500).json({ error: 'Failed to fetch instructors' });
+  }
+};
