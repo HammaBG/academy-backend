@@ -52,3 +52,16 @@ export const isAdmin = async (
 
   next();
 };
+
+export const authorizeRoles = (...roles: string[]) => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const userRole = req.user?.user_metadata?.role;
+    if (!roles.includes(userRole)) {
+      res.status(403).json({
+        error: `Role: ${userRole} is not allowed to access this resource`,
+      });
+      return;
+    }
+    next();
+  };
+};
