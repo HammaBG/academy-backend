@@ -481,6 +481,48 @@ export const getAdminAllCourses = CatchAsyncError(
   }
 );
 
+// get instructor's own courses
+export const getInstructorCourses = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized", 401));
+      }
+
+      const { data: courses, error } = await supabaseAdmin
+        .from('courses')
+        .select('*')
+        .eq('creator', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        return next(new ErrorHandler(error.message, 400));
+      }
+
+      // Hydrate creator data
+      const { data: userData } = await supabaseAdmin
+        .from('users')
+        .select('id, first_name, last_name, avatar_url')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const hydratedCourses = (courses || []).map((course) => ({
+        ...course,
+        creator: userData || { first_name: "Academy", last_name: "Instructor" },
+      }));
+
+      res.status(200).json({
+        success: true,
+        courses: hydratedCourses,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 400));
+    }
+  }
+);
+
 // Delete Course --- only for admin
 export const deleteCourse = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {

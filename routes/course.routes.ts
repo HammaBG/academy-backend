@@ -9,6 +9,7 @@ import {
   getAdminAllCourses,
   getAllCourses,
   getCourseByUser,
+  getInstructorCourses,
   getSingleCourse,
   uploadCourse,
 } from "../controllers/course.controller";
@@ -39,6 +40,13 @@ courseRouter.get(
   requireAuth,
   authorizeRoles("admin", "instructor", "sales"),
   getAdminAllCourses
+);
+
+courseRouter.get(
+  "/get-instructor-courses",
+  requireAuth,
+  authorizeRoles("instructor"),
+  getInstructorCourses
 );
 
 courseRouter.get("/get-course-content/:id", requireAuth, getCourseByUser);
