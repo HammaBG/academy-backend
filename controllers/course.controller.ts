@@ -7,6 +7,39 @@ import { supabaseAdmin } from "../config/supabase";
 import { redis } from "../config/redis";
 import axios from "axios";
 import { createCourseSchema, updateCourseSchema } from "../models/course.model";
+import { User } from "@supabase/supabase-js";
+
+// Helper to fetch instructor data from users table OR Supabase Auth metadata
+const fetchInstructorData = async (userId: string) => {
+  try {
+    // 1. Try public users table
+    const { data: userData } = await supabaseAdmin
+      .from('users')
+      .select('id, first_name, last_name, avatar_url, title')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (userData) return userData;
+
+    // 2. Fallback to Supabase Auth metadata
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
+    
+    if (authError || !user) {
+      return { first_name: "Academy", last_name: "Instructor", title: "Senior Expert" };
+    }
+
+    const meta = user.user_metadata || {};
+    return {
+      id: user.id,
+      first_name: meta.first_name || user.email?.split('@')[0] || "Academy",
+      last_name: meta.last_name || "Instructor",
+      avatar_url: meta.avatar_url || "",
+      title: meta.title || "Senior Expert"
+    };
+  } catch (err) {
+    return { first_name: "Academy", last_name: "Instructor", title: "Senior Expert" };
+  }
+};
 
 // upload course
 export const uploadCourse = CatchAsyncError(
@@ -35,7 +68,23 @@ export const uploadCourse = CatchAsyncError(
 
       data.creator = (req as any).user?.id;
 
-      createCourse(data, res, next);
+      // Hydrate creator for the immediate response
+      const hydratedCreator = await fetchInstructorData(data.creator);
+      
+      const { data: newCourse, error } = await supabaseAdmin
+        .from('courses')
+        .insert(data)
+        .select()
+        .single();
+
+      if (error) {
+        return next(new ErrorHandler(error.message, 400));
+      }
+
+      res.status(201).json({
+        success: true,
+        course: { ...newCourse, creator: hydratedCreator },
+      });
     } catch (error: any) {
       console.log(error.message);
       return next(new ErrorHandler(error.message, 500));
@@ -94,12 +143,20 @@ export const editCourse = CatchAsyncError(
       }
 
       // Update Redis
-      const redisKey = `course:${courseId}`;
-      await redis.set(redisKey, JSON.stringify(updatedCourse));
+      const redisKeyById = `course:${courseId}`;
+      await redis.set(redisKeyById, JSON.stringify(updatedCourse));
+      
+      // Also clear by URL if it exists to be safe
+      if (updatedCourse.url) {
+        await redis.del(`course:${updatedCourse.url}`);
+      }
+
+      // Hydrate for immediate response
+      const hydratedCreator = await fetchInstructorData(updatedCourse.creator);
 
       res.status(200).json({
         success: true,
-        course: updatedCourse,
+        course: { ...updatedCourse, creator: hydratedCreator },
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -155,17 +212,7 @@ export const getSingleCourse = CatchAsyncError(
 
       // Manually fetch creator info since foreign key relation is missing/misnamed in DB
       if (course && course.creator && typeof course.creator === 'string') {
-        const { data: userData } = await supabaseAdmin
-          .from('users')
-          .select('id, first_name, last_name, avatar_url')
-          .eq('id', course.creator)
-          .maybeSingle();
-        
-        if (userData) {
-          course.creator = userData;
-        } else {
-           course.creator = { first_name: "Academy", last_name: "Instructor" };
-        }
+        course.creator = await fetchInstructorData(course.creator);
       }
 
       await redis.set(`course:${courseId}`, JSON.stringify(course), "EX", 604800); // 7days
@@ -197,15 +244,9 @@ export const getAllCourses = CatchAsyncError(
       // Hydrate creator data for each course
       const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
         if (course.creator && typeof course.creator === 'string') {
-          const { data: userData } = await supabaseAdmin
-            .from('users')
-            .select('id, first_name, last_name, avatar_url')
-            .eq('id', course.creator)
-            .maybeSingle();
-          
           return {
             ...course,
-            creator: userData || { first_name: "Academy", last_name: "Instructor" }
+            creator: await fetchInstructorData(course.creator)
           };
         }
         return course;
@@ -502,15 +543,11 @@ export const getInstructorCourses = CatchAsyncError(
       }
 
       // Hydrate creator data
-      const { data: userData } = await supabaseAdmin
-        .from('users')
-        .select('id, first_name, last_name, avatar_url')
-        .eq('id', userId)
-        .maybeSingle();
+      const creatorData = await fetchInstructorData(userId);
 
       const hydratedCourses = (courses || []).map((course) => ({
         ...course,
-        creator: userData || { first_name: "Academy", last_name: "Instructor" },
+        creator: creatorData,
       }));
 
       res.status(200).json({

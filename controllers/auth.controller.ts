@@ -136,19 +136,77 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     // Attempt to update public users table safely
-    const updateData: any = {};
+    const updateData: any = { id };
     if (role) updateData.role = role;
     if (title) updateData.title = title;
     if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
+    
+    // Supplement with current metadata
+    const userMeta = authData.user.user_metadata;
+    if (userMeta?.first_name) updateData.first_name = userMeta.first_name;
+    if (userMeta?.last_name) updateData.last_name = userMeta.last_name;
 
-    if (Object.keys(updateData).length > 0) {
-      await supabaseAdmin.from('users').update(updateData).eq('id', id);
+    if (Object.keys(updateData).length > 1) {
+      await supabaseAdmin.from('users').upsert(updateData);
     }
 
     res.status(200).json({ message: 'User updated successfully', user: authData.user });
   } catch (err) {
     console.error("Update User Error:", err);
     res.status(500).json({ error: 'Failed to update user' });
+  }
+};
+
+export const updateProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user;
+    if (!user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const id = user.id;
+    const { title, avatar_url } = req.body;
+
+    let finalAvatarUrl = avatar_url;
+
+    // Fast check if avatar_url is Base64 image
+    if (avatar_url && avatar_url.startsWith('data:image')) {
+       const myCloud = await cloudinary.uploader.upload(avatar_url, {
+         folder: "users",
+       });
+       finalAvatarUrl = myCloud.secure_url;
+    }
+
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id, {
+      user_metadata: { 
+        ...(title && { title }),
+        ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
+      }
+    });
+
+    if (authError) {
+      res.status(400).json({ error: authError.message });
+      return;
+    }
+
+    // Update public users table
+    const updateData: any = { id };
+    if (title) updateData.title = title;
+    if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
+
+    // Supplement with current metadata
+    const userMeta = authData.user.user_metadata;
+    if (userMeta?.first_name) updateData.first_name = userMeta.first_name;
+    if (userMeta?.last_name) updateData.last_name = userMeta.last_name;
+
+    if (Object.keys(updateData).length > 1) {
+      await supabaseAdmin.from('users').upsert(updateData);
+    }
+
+    res.status(200).json({ message: 'Profile updated successfully', user: authData.user });
+  } catch (err) {
+    console.error("Update Profile Error:", err);
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 };
 
