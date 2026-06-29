@@ -32,7 +32,6 @@ app.use(helmet({
 app.use(cors(corsOptions));
 
 // ✅ FIX 3: Handle preflight requests
-app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
