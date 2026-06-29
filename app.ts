@@ -12,25 +12,75 @@ import wishlistRoutes from './routes/wishlist.routes';
 
 const app = express();
 
-const PORT = process.env.PORT || 5000;
+// ✅ FIX 1: Configure CORS properly for Render
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN 
+    ? process.env.CORS_ORIGIN.split(',')
+    : ['http://localhost:3000', 'http://localhost:5173'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Length', 'X-Knowledge-Id'],
+  maxAge: 86400 // 24 hours
+};
 
-app.listen(PORT, () => {
-    console.log("================================");
-    console.log(`🚀 Server started on port ${PORT}`);
-    console.log(`🌍 http://localhost:${PORT}`);
-    console.log("================================");
-});
-app.use(helmet());
-app.use(cors());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
+// ✅ FIX 2: Use configured CORS
+app.use(cors(corsOptions));
+
+// ✅ FIX 3: Handle preflight requests
+app.options('*', cors(corsOptions));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Routes
+// ✅ FIX 4: Health check endpoint (useful for Render)
+app.get('/api/health', (req: Request, res: Response) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    cors_origin: process.env.CORS_ORIGIN || 'not set'
+  });
+});
+
+// ✅ FIX 5: Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 
+// ✅ FIX 6: 404 handler
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.originalUrl} not found`
+  });
+});
+
+// ✅ FIX 7: Error handler
+app.use((err: any, req: Request, res: Response, next: any) => {
+  console.error('Error:', err.message);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error'
+  });
+});
+
+// ✅ FIX 8: Only start server if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log("================================");
+    console.log(`🚀 Server started on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 CORS Origin: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
+    console.log("================================");
+  });
+}
 
 export default app;
