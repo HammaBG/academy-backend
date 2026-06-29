@@ -3,12 +3,14 @@ import { z } from 'zod';
 export interface Category {
   id: string;
   name: string;
+  image_url?: string;
   created_at?: string;
 }
 
 // Validation schemas with Zod
 export const createCategorySchema = z.object({
   name: z.string().min(1, 'Name is required'),
+  image_url: z.string().optional(),
 });
 
 export const updateCategorySchema = createCategorySchema.partial();
