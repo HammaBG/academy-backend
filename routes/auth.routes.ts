@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { signUp, signIn, getProfile, getAllUsers, updateUser, getPublicInstructors, updateProfile } from '../controllers/auth.controller';
+import { signUp, signIn, getProfile, getAllUsers, updateUser, getPublicInstructors, updateProfile, getInstructorById } from '../controllers/auth.controller';
 import { requireAuth, isAdmin } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -8,6 +8,7 @@ const router = Router();
 router.post('/signup', signUp);
 router.post('/login', signIn);
 router.get('/instructors', getPublicInstructors);
+router.get('/instructors/:id', getInstructorById);
 
 // Protected routes (requires valid Bearer token)
 router.get('/profile', requireAuth as any, getProfile);

@@ -9,9 +9,12 @@ import {
   getAdminAllCourses,
   getAllCourses,
   getCourseByUser,
+  getEnrolledCourses,
   getInstructorCourses,
   getSingleCourse,
   uploadCourse,
+  assignCourseToUser,
+
 } from "../controllers/course.controller";
 import { authorizeRoles, requireAuth } from "../middlewares/auth.middleware";
 
@@ -51,6 +54,8 @@ courseRouter.get(
 
 courseRouter.get("/get-course-content/:id", requireAuth, getCourseByUser);
 
+courseRouter.get("/get-user-courses", requireAuth, getEnrolledCourses);
+
 courseRouter.put("/add-question", requireAuth, addQuestion);
 
 courseRouter.put("/add-answer", requireAuth, addAnswer);
@@ -74,5 +79,21 @@ courseRouter.delete(
   authorizeRoles("admin"),
   deleteCourse
 );
+
+courseRouter.post(
+  "/assign-course",
+  requireAuth,
+  authorizeRoles("admin"),
+  assignCourseToUser
+);
+
+
+courseRouter.get(
+  "/get-enrolled-courses",
+  requireAuth,
+  getEnrolledCourses
+);
+
+
 
 export default courseRouter;

@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { supabase, supabaseAdmin } from '../config/supabase';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
 
-// ... (existing schemas and controllers)
 
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -38,7 +37,7 @@ const signInSchema = z.object({
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
     const parsedData = signUpSchema.safeParse(req.body);
-    
+
     if (!parsedData.success) {
       res.status(400).json({ error: 'Validation failed', details: parsedData.error.format() });
       return;
@@ -47,8 +46,8 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
     const { email, password, firstName, lastName, phone, role } = parsedData.data;
 
     // Pass the extra metadata inside 'options.data'
-    const { data, error } = await supabase.auth.signUp({ 
-      email, 
+    const { data, error } = await supabase.auth.signUp({
+      email,
       password,
       options: {
         data: {
@@ -59,12 +58,12 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
         }
       }
     });
-    
+
     if (error) {
       res.status(400).json({ error: error.message });
       return;
     }
-    
+
     res.status(201).json({ message: 'User signed up successfully', data });
   } catch (err) {
     res.status(500).json({ error: 'Sign up failed' });
@@ -83,12 +82,12 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
     const { email, password } = parsedData.data;
 
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    
+
     if (error) {
       res.status(400).json({ error: error.message });
       return;
     }
-    
+
     res.status(200).json({ message: 'User signed in successfully', data });
   } catch (err) {
     res.status(500).json({ error: 'Sign in failed' });
@@ -99,9 +98,9 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
 export const getProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   // The 'user' is populated by requireAuth middleware
   const user = req.user;
-  res.status(200).json({ 
-    message: 'This is a protected route. You are authenticated!', 
-    user 
+  res.status(200).json({
+    message: 'This is a protected route. You are authenticated!',
+    user
   });
 };
 
@@ -116,14 +115,14 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
 
     // Fast check if avatar_url is Base64 image
     if (avatar_url && avatar_url.startsWith('data:image')) {
-       const myCloud = await cloudinary.uploader.upload(avatar_url, {
-         folder: "users",
-       });
-       finalAvatarUrl = myCloud.secure_url;
+      const myCloud = await cloudinary.uploader.upload(avatar_url, {
+        folder: "users",
+      });
+      finalAvatarUrl = myCloud.secure_url;
     }
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id as string, {
-      user_metadata: { 
+      user_metadata: {
         ...(role && { role }),
         ...(title && { title }),
         ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
@@ -140,7 +139,7 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     if (role) updateData.role = role;
     if (title) updateData.title = title;
     if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
-    
+
     // Supplement with current metadata
     const userMeta = authData.user.user_metadata;
     if (userMeta?.first_name) updateData.first_name = userMeta.first_name;
@@ -171,14 +170,14 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
 
     // Fast check if avatar_url is Base64 image
     if (avatar_url && avatar_url.startsWith('data:image')) {
-       const myCloud = await cloudinary.uploader.upload(avatar_url, {
-         folder: "users",
-       });
-       finalAvatarUrl = myCloud.secure_url;
+      const myCloud = await cloudinary.uploader.upload(avatar_url, {
+        folder: "users",
+      });
+      finalAvatarUrl = myCloud.secure_url;
     }
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id, {
-      user_metadata: { 
+      user_metadata: {
         ...(title && { title }),
         ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
       }
@@ -215,8 +214,8 @@ export const getPublicInstructors = async (req: Request, res: Response): Promise
     const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers();
 
     if (error) {
-       res.status(400).json({ error: error.message });
-       return;
+      res.status(400).json({ error: error.message });
+      return;
     }
 
     const instructors = users
@@ -233,5 +232,39 @@ export const getPublicInstructors = async (req: Request, res: Response): Promise
   } catch (err) {
     console.error("Fetch Instructors Error:", err);
     res.status(500).json({ error: 'Failed to fetch instructors' });
+  }
+};
+
+export const getInstructorById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const { data: { user }, error } = await supabaseAdmin.auth.admin.getUserById(id);
+
+    if (error || !user) {
+      res.status(404).json({ error: 'Instructor not found' });
+      return;
+    }
+
+    if (user.user_metadata?.role !== 'instructor') {
+      res.status(404).json({ error: 'Instructor not found' });
+      return;
+    }
+
+    const instructor = {
+      id: user.id,
+      first_name: user.user_metadata?.first_name || '',
+      last_name: user.user_metadata?.last_name || '',
+      avatar_url: user.user_metadata?.avatar_url || '',
+      title: user.user_metadata?.title || '',
+      email: user.email || '',
+      bio: user.user_metadata?.bio || '',
+      phone: user.user_metadata?.phone || ''
+    };
+
+    res.status(200).json({ instructor });
+  } catch (err) {
+    console.error("Fetch Instructor Error:", err);
+    res.status(500).json({ error: 'Failed to fetch instructor' });
   }
 };
