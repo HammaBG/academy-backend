@@ -41,6 +41,29 @@ const fetchInstructorData = async (userId: string) => {
   }
 };
 
+// Helper to enrich courses with their matching category color dynamically
+const enrichCoursesWithCategoryColor = async (courses: any[]): Promise<any[]> => {
+  if (!courses || courses.length === 0) return courses;
+  try {
+    const { data: categories } = await supabaseAdmin
+      .from('categories')
+      .select('name, color');
+    if (categories && categories.length > 0) {
+      const catColorMap = new Map(categories.map(c => [c.name.toLowerCase().trim(), c.color]));
+      return courses.map(course => {
+        const catName = (course.categories || '').toLowerCase().trim();
+        return {
+          ...course,
+          category_color: catColorMap.get(catName) || '#F95353'
+        };
+      });
+    }
+  } catch (err) {
+    console.error('Course category enrichment error:', err);
+  }
+  return courses.map(c => ({ ...c, category_color: '#F95353' }));
+};
+
 // upload course
 export const uploadCourse = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -81,9 +104,11 @@ export const uploadCourse = CatchAsyncError(
         return next(new ErrorHandler(error.message, 400));
       }
 
+      const [enrichedCourse] = await enrichCoursesWithCategoryColor([newCourse]);
+
       res.status(201).json({
         success: true,
-        course: { ...newCourse, creator: hydratedCreator },
+        course: { ...enrichedCourse, creator: hydratedCreator },
       });
     } catch (error: any) {
       console.log(error.message);
@@ -154,9 +179,11 @@ export const editCourse = CatchAsyncError(
       // Hydrate for immediate response
       const hydratedCreator = await fetchInstructorData(updatedCourse.creator);
 
+      const [enrichedCourse] = await enrichCoursesWithCategoryColor([updatedCourse]);
+
       res.status(200).json({
         success: true,
-        course: { ...updatedCourse, creator: hydratedCreator },
+        course: { ...enrichedCourse, creator: hydratedCreator },
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -215,11 +242,13 @@ export const getSingleCourse = CatchAsyncError(
         course.creator = await fetchInstructorData(course.creator);
       }
 
-      await redis.set(`course:${courseId}`, JSON.stringify(course), "EX", 604800); // 7days
+      const [enrichedCourse] = await enrichCoursesWithCategoryColor([course]);
+
+      await redis.set(`course:${courseId}`, JSON.stringify(enrichedCourse), "EX", 604800); // 7days
 
       res.status(200).json({
         success: true,
-        course,
+        course: enrichedCourse,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -252,9 +281,11 @@ export const getAllCourses = CatchAsyncError(
         return course;
       }));
 
+      const enrichedCourses = await enrichCoursesWithCategoryColor(hydratedCourses);
+
       res.status(200).json({
         success: true,
-        courses: hydratedCourses,
+        courses: enrichedCourses,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));

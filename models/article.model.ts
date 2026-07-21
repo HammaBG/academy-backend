@@ -7,6 +7,9 @@ export interface Article {
   status: 'draft' | 'published';
   excerpt?: string;
   image_url?: string;
+  category_id?: string;
+  category_name?: string;
+  category_color?: string;
   created_at?: string;
 }
 
@@ -16,6 +19,9 @@ export const createArticleSchema = z.object({
   content: z.string().min(1, 'Content is required'),
   status: z.enum(['draft', 'published']).default('draft'),
   excerpt: z.string().optional(),
+  category_id: z.string().optional(),
+  category_name: z.string().optional(),
+  category_color: z.string().optional(),
 });
 
 export const updateArticleSchema = createArticleSchema.partial();

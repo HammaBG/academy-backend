@@ -4,6 +4,7 @@ export interface Category {
   id: string;
   name: string;
   image_url?: string;
+  color?: string;
   created_at?: string;
 }
 
@@ -11,6 +12,7 @@ export interface Category {
 export const createCategorySchema = z.object({
   name: z.string().min(1, 'Name is required'),
   image_url: z.string().optional(),
+  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid hex color').optional(),
 });
 
 export const updateCategorySchema = createCategorySchema.partial();

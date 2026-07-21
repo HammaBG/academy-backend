@@ -15,11 +15,11 @@ export const createCategory = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { name, image_url } = parsed.data;
+    const { name, image_url, color } = parsed.data;
 
     const { data, error } = await supabaseAdmin
       .from('categories')
-      .insert({ name, image_url })
+      .insert({ name, image_url, color })
       .select()
       .returns<Category>()
       .single();
@@ -91,11 +91,11 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { name, image_url } = parsed.data;
+    const { name, image_url, color } = parsed.data;
 
     const { data, error } = await supabaseAdmin
       .from('categories')
-      .update({ name, image_url })
+      .update({ name, image_url, color })
       .eq('id', id)
       .select()
       .returns<Category>()

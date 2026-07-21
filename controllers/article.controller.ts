@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import 'multer';
 import { supabaseAdmin } from '../config/supabase';
 import { cloudinary } from '../config/cloudinary';
 import { 
@@ -21,6 +22,43 @@ const uploadToCloudinary = (buffer: Buffer, filename: string): Promise<string> =
   });
 };
 
+// Helper: attach category details to articles list
+const enrichArticlesWithCategory = async (articles: Article[]): Promise<Article[]> => {
+  if (!articles || articles.length === 0) return articles;
+
+  const categoryIds = Array.from(
+    new Set(articles.map((a) => a.category_id).filter((id): id is string => Boolean(id)))
+  );
+
+  if (categoryIds.length === 0) return articles;
+
+  try {
+    const { data: categories } = await supabaseAdmin
+      .from('categories')
+      .select('id, name, color')
+      .in('id', categoryIds);
+
+    if (categories && categories.length > 0) {
+      const catMap = new Map(categories.map((c) => [c.id, c]));
+      return articles.map((art) => {
+        if (art.category_id && catMap.has(art.category_id)) {
+          const cat = catMap.get(art.category_id)!;
+          return {
+            ...art,
+            category_name: art.category_name || cat.name,
+            category_color: art.category_color || cat.color,
+          };
+        }
+        return art;
+      });
+    }
+  } catch (err) {
+    console.error('Category enrichment error:', err);
+  }
+
+  return articles;
+};
+
 // POST /api/articles — create article with image
 export const createArticle = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -30,7 +68,22 @@ export const createArticle = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const { title, content, status, excerpt } = parsed.data;
+    const { title, content, status, excerpt, category_id, category_name, category_color } = parsed.data;
+
+    let catName = category_name;
+    let catColor = category_color;
+
+    if (category_id && (!catName || !catColor)) {
+      const { data: catData } = await supabaseAdmin
+        .from('categories')
+        .select('name, color')
+        .eq('id', category_id)
+        .single();
+      if (catData) {
+        catName = catName || catData.name;
+        catColor = catColor || catData.color;
+      }
+    }
 
     let image_url = '';
     if (req.file) {
@@ -38,19 +91,52 @@ export const createArticle = async (req: Request, res: Response): Promise<void> 
       image_url = await uploadToCloudinary(req.file.buffer, filename);
     }
 
-    const { data, error } = await supabaseAdmin
+    const insertPayload: Record<string, unknown> = {
+      title,
+      content,
+      status,
+    };
+    if (excerpt) insertPayload.excerpt = excerpt;
+    if (image_url) insertPayload.image_url = image_url;
+    if (category_id) insertPayload.category_id = category_id;
+    if (catName) insertPayload.category_name = catName;
+    if (catColor) insertPayload.category_color = catColor;
+
+    let { data, error } = await supabaseAdmin
       .from('articles')
-      .insert({ title, content, status, excerpt, image_url })
+      .insert(insertPayload)
       .select()
-      .returns<Article>()
+      .returns<Article[]>()
       .single();
 
-    if (error) {
-      res.status(400).json({ error: error.message });
+    // Fallback if category_name or category_color columns don't exist in Supabase table schema
+    if (error && (error.message.includes('category_name') || error.message.includes('category_color'))) {
+      delete insertPayload.category_name;
+      delete insertPayload.category_color;
+
+      const fallback = await supabaseAdmin
+        .from('articles')
+        .insert(insertPayload)
+        .select()
+        .returns<Article[]>()
+        .single();
+
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error || !data) {
+      res.status(400).json({ error: error?.message || 'Failed to create article' });
       return;
     }
 
-    res.status(201).json({ data });
+    const result = {
+      ...data,
+      category_name: data.category_name || catName,
+      category_color: data.category_color || catColor,
+    };
+
+    res.status(201).json({ data: result });
   } catch (err) {
     console.error('Create article error:', err);
     res.status(500).json({ error: 'Failed to create article' });
@@ -72,7 +158,8 @@ export const getPublicArticles = async (req: Request, res: Response): Promise<vo
       return;
     }
 
-    res.status(200).json({ data });
+    const enriched = await enrichArticlesWithCategory(data || []);
+    res.status(200).json({ data: enriched });
   } catch (err) {
     console.error('Get public articles error:', err);
     res.status(500).json({ error: 'Failed to fetch public articles' });
@@ -93,7 +180,8 @@ export const getAllArticles = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    res.status(200).json({ data });
+    const enriched = await enrichArticlesWithCategory(data || []);
+    res.status(200).json({ data: enriched });
   } catch (err) {
     console.error('Get articles error:', err);
     res.status(500).json({ error: 'Failed to fetch articles' });
@@ -110,15 +198,16 @@ export const getPublicArticleById = async (req: Request, res: Response): Promise
       .select('*')
       .eq('id', id)
       .eq('status', 'published')
-      .returns<Article>()
+      .returns<Article[]>()
       .single();
 
-    if (error) {
+    if (error || !data) {
       res.status(404).json({ error: 'Article not found or not published' });
       return;
     }
 
-    res.status(200).json({ data });
+    const [enriched] = await enrichArticlesWithCategory([data]);
+    res.status(200).json({ data: enriched });
   } catch (err) {
     console.error('Get public article error:', err);
     res.status(500).json({ error: 'Failed to fetch public article' });
@@ -134,15 +223,16 @@ export const getArticleById = async (req: Request, res: Response): Promise<void>
       .from('articles')
       .select('*')
       .eq('id', id)
-      .returns<Article>()
+      .returns<Article[]>()
       .single();
 
-    if (error) {
+    if (error || !data) {
       res.status(404).json({ error: 'Article not found' });
       return;
     }
 
-    res.status(200).json({ data });
+    const [enriched] = await enrichArticlesWithCategory([data]);
+    res.status(200).json({ data: enriched });
   } catch (err) {
     console.error('Get article error:', err);
     res.status(500).json({ error: 'Failed to fetch article' });
@@ -159,7 +249,28 @@ export const updateArticle = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const updates: Record<string, unknown> = { ...parsed.data };
+    const updates: Record<string, unknown> = {};
+    const dataObj = parsed.data;
+
+    if (dataObj.title !== undefined) updates.title = dataObj.title;
+    if (dataObj.content !== undefined) updates.content = dataObj.content;
+    if (dataObj.status !== undefined) updates.status = dataObj.status;
+    if (dataObj.excerpt !== undefined) updates.excerpt = dataObj.excerpt;
+    if (dataObj.category_id !== undefined) updates.category_id = dataObj.category_id;
+    if (dataObj.category_name !== undefined) updates.category_name = dataObj.category_name;
+    if (dataObj.category_color !== undefined) updates.category_color = dataObj.category_color;
+
+    if (updates.category_id && (!updates.category_name || !updates.category_color)) {
+      const { data: catData } = await supabaseAdmin
+        .from('categories')
+        .select('name, color')
+        .eq('id', updates.category_id as string)
+        .single();
+      if (catData) {
+        updates.category_name = updates.category_name || catData.name;
+        updates.category_color = updates.category_color || catData.color;
+      }
+    }
 
     // If new image uploaded, replace it
     if (req.file) {
@@ -181,20 +292,38 @@ export const updateArticle = async (req: Request, res: Response): Promise<void> 
       updates.image_url = await uploadToCloudinary(req.file.buffer, filename);
     }
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('articles')
       .update(updates)
       .eq('id', id)
       .select()
-      .returns<Article>()
+      .returns<Article[]>()
       .single();
 
-    if (error) {
+    // Fallback if category_name or category_color columns don't exist in Supabase table schema
+    if (error && (error.message.includes('category_name') || error.message.includes('category_color'))) {
+      delete updates.category_name;
+      delete updates.category_color;
+
+      const fallback = await supabaseAdmin
+        .from('articles')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .returns<Article[]>()
+        .single();
+
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    if (error || !data) {
       res.status(404).json({ error: 'Article not found' });
       return;
     }
 
-    res.status(200).json({ data });
+    const [enriched] = await enrichArticlesWithCategory([data]);
+    res.status(200).json({ data: enriched });
   } catch (err) {
     console.error('Update article error:', err);
     res.status(500).json({ error: 'Failed to update article' });
