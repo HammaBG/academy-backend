@@ -9,6 +9,8 @@ import articleRoutes from './routes/article.routes';
 import categoryRoutes from './routes/category.routes';
 import courseRoutes from './routes/course.routes';
 import wishlistRoutes from './routes/wishlist.routes';
+import formRoutes from './routes/form.routes';
+import enrollmentCodeRoutes from './routes/enrollmentCode.routes';
 
 const app = express();
 
@@ -52,6 +54,8 @@ app.use('/api/articles', articleRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/courses', courseRoutes);
 app.use('/api/wishlist', wishlistRoutes);
+app.use('/api/forms', formRoutes);
+app.use('/api/enrollment-codes', enrollmentCodeRoutes);
 
 // ✅ FIX 6: 404 handler
 app.use((req: Request, res: Response) => {
