@@ -164,7 +164,7 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
       return;
     }
     const id = user.id;
-    const { title, avatar_url } = req.body;
+    const { title, avatar_url, bio, linkedin_url } = req.body;
 
     let finalAvatarUrl = avatar_url;
 
@@ -178,8 +178,10 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
 
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id, {
       user_metadata: {
-        ...(title && { title }),
-        ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
+        ...(title !== undefined && { title }),
+        ...(finalAvatarUrl !== undefined && { avatar_url: finalAvatarUrl }),
+        ...(bio !== undefined && { bio }),
+        ...(linkedin_url !== undefined && { linkedin_url })
       }
     });
 
@@ -238,6 +240,11 @@ export const getPublicInstructors = async (req: Request, res: Response): Promise
 export const getInstructorById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+
+    if (typeof id !== 'string') {
+      res.status(400).json({ error: 'Invalid instructor ID' });
+      return;
+    }
 
     const { data: { user }, error } = await supabaseAdmin.auth.admin.getUserById(id);
 
