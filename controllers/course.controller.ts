@@ -368,13 +368,19 @@ export const addQuestion = CatchAsyncError(
       }
 
       const courseData = course.course_data || [];
-      const contentIndex = courseData.findIndex((item: any) => item.id === contentId || item._id === contentId);
+      const contentIndex = courseData.findIndex((item: any) => 
+        item.id === contentId || 
+        item._id === contentId || 
+        item.title === contentId || 
+        item.video_section === contentId
+      );
 
       if (contentIndex === -1) {
         return next(new ErrorHandler("Invalid content id", 400));
       }
 
       const newQuestion = {
+        id: Math.random().toString(36).substring(2, 15) + Date.now().toString(36),
         user: {
           id: user.id,
           name: user.user_metadata?.first_name + " " + user.user_metadata?.last_name,
@@ -425,7 +431,12 @@ export const addAnswer = CatchAsyncError(
       }
 
       const courseData = course.course_data || [];
-      const contentIndex = courseData.findIndex((item: any) => item.id === contentId || item._id === contentId);
+      const contentIndex = courseData.findIndex((item: any) => 
+        item.id === contentId || 
+        item._id === contentId || 
+        item.title === contentId || 
+        item.video_section === contentId
+      );
 
       if (contentIndex === -1) {
         return next(new ErrorHandler("Invalid content id", 400));
