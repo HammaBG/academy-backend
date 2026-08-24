@@ -1,9 +1,10 @@
 import { Response, NextFunction } from "express";
 import { CatchAsyncError } from "../utils/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
-import { supabaseAdmin } from "../config/supabase";
 import { AuthenticatedRequest } from "../middlewares/auth.middleware";
-import { toggleWishlistSchema } from "../models/wishlist.model";
+import { toggleWishlistSchema, Wishlist as WishlistModel } from "../models/wishlist.model";
+import { Course as CourseModel } from "../models/course.model";
+import { User as UserModel } from "../models/user.model";
 
 // Toggle course in wishlist
 export const toggleWishlist = CatchAsyncError(
@@ -22,27 +23,11 @@ export const toggleWishlist = CatchAsyncError(
       }
 
       // Check if already in wishlist
-      const { data: existing, error: fetchError } = await supabaseAdmin
-        .from('wishlist')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('course_id', courseId)
-        .maybeSingle();
-
-      if (fetchError) {
-        return next(new ErrorHandler(fetchError.message, 400));
-      }
+      const existing = await WishlistModel.findOne({ user_id: userId, course_id: courseId });
 
       if (existing) {
         // Remove from wishlist
-        const { error: deleteError } = await supabaseAdmin
-          .from('wishlist')
-          .delete()
-          .eq('id', existing.id);
-
-        if (deleteError) {
-          return next(new ErrorHandler(deleteError.message, 400));
-        }
+        await WishlistModel.findByIdAndDelete(existing._id);
 
         res.status(200).json({
           success: true,
@@ -51,16 +36,11 @@ export const toggleWishlist = CatchAsyncError(
         });
       } else {
         // Add to wishlist
-        const { error: insertError } = await supabaseAdmin
-          .from('wishlist')
-          .insert({
-            user_id: userId,
-            course_id: courseId
-          });
-
-        if (insertError) {
-          return next(new ErrorHandler(insertError.message, 400));
-        }
+        const newItem = new WishlistModel({
+          user_id: userId,
+          course_id: courseId
+        });
+        await newItem.save();
 
         res.status(200).json({
           success: true,
@@ -84,55 +64,39 @@ export const getMyWishlist = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // Fetch wishlist with course details
-      // Note: We use .select('*, courses(*)') to get the joined course data
-      const { data: wishlistItems, error } = await supabaseAdmin
-        .from('wishlist')
-        .select(`
-          id,
-          created_at,
-          course:courses (
-            id,
-            name,
-            description,
-            short_description,
-            price,
-            estimated_price,
-            thumbnail,
-            ratings,
-            purchased,
-            level,
-            categories,
-            ready,
-            status,
-            creator
-          )
-        `)
-        .eq('user_id', userId);
+      const wishlistItems = await WishlistModel.find({ user_id: userId });
 
-      if (error) {
-        return next(new ErrorHandler(error.message, 400));
+      if (!wishlistItems || wishlistItems.length === 0) {
+        return res.status(200).json({
+          success: true,
+          courses: []
+        });
       }
 
-      // Format and hydrate creator info if needed (similar to course.controller.ts)
-      const courses = await Promise.all((wishlistItems || [])
-        .filter(item => item.course) // filter out null courses if any
-        .map(async (item: any) => {
-          const course = item.course;
-          
-          if (course.creator && typeof course.creator === 'string') {
-            const { data: userData } = await supabaseAdmin
-              .from('users')
-              .select('id, first_name, last_name, avatar_url')
-              .eq('id', course.creator)
-              .maybeSingle();
-            
-            course.creator = userData || { first_name: "Academy", last_name: "Instructor" };
+      const courseIds = wishlistItems.map(item => item.course_id);
+
+      const dbCourses = await CourseModel.find({ _id: { $in: courseIds } });
+
+      const courses = await Promise.all(dbCourses.map(async (course) => {
+        const doc = course.toObject();
+        doc.id = doc._id.toString();
+
+        if (doc.creator && typeof doc.creator === 'string') {
+          const userData = await UserModel.findById(doc.creator);
+          if (userData) {
+            doc.creator = {
+              id: userData._id.toString(),
+              first_name: userData.first_name || '',
+              last_name: userData.last_name || '',
+              avatar_url: userData.avatar_url || ''
+            };
+          } else {
+            doc.creator = { first_name: "Academy", last_name: "Instructor", avatar_url: '' };
           }
-          
-          return course;
-        })
-      );
+        }
+        
+        return doc;
+      }));
 
       res.status(200).json({
         success: true,

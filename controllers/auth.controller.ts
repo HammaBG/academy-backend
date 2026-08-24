@@ -1,23 +1,14 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { supabase, supabaseAdmin } from '../config/supabase';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import { User as UserModel } from '../models/user.model';
 import { AuthenticatedRequest } from '../middlewares/auth.middleware';
+import { cloudinary } from '../config/cloudinary';
+import { sendWelcomeEmail, sendPasswordResetEmail } from '../services/email.service';
 
-
-export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers();
-
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-
-    res.status(200).json({ users });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch users' });
-  }
-};
+const JWT_SECRET = process.env.JWT_SECRET || "d3d8c11e7401d4b6cbdeca781938fae6eb5b01859bf5db0e97d4c2b9a71bcf23";
 
 // Validation schemas with Zod
 const signUpSchema = z.object({
@@ -25,7 +16,7 @@ const signUpSchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters'),
   firstName: z.string().min(2, 'First name is required'),
   lastName: z.string().min(2, 'Last name is required'),
-  phone: z.string().min(8, 'Phone number is required'),
+  phone: z.string().min(8, 'Phone number must be at least 8 digits'),
   role: z.enum(['user', 'instructor', 'admin']).default('user'),
 });
 
@@ -33,6 +24,29 @@ const signInSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(1, 'Password is required'),
 });
+
+export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dbUsers = await UserModel.find().select('-password');
+    const users = dbUsers.map(u => ({
+      id: u._id.toString(),
+      email: u.email,
+      user_metadata: {
+        first_name: u.first_name,
+        last_name: u.last_name,
+        role: u.role,
+        avatar_url: u.avatar_url,
+        phone: u.phone,
+        title: u.title,
+        bio: u.bio,
+        linkedin_url: u.linkedin_url
+      }
+    }));
+    res.status(200).json({ users });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+};
 
 export const signUp = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -45,27 +59,63 @@ export const signUp = async (req: Request, res: Response): Promise<void> => {
 
     const { email, password, firstName, lastName, phone, role } = parsedData.data;
 
-    // Pass the extra metadata inside 'options.data'
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          first_name: firstName,
-          last_name: lastName,
-          phone_number: phone,
-          role: role
-        }
-      }
-    });
-
-    if (error) {
-      res.status(400).json({ error: error.message });
+    // Check if user already exists
+    const existingUser = await UserModel.findOne({ email });
+    if (existingUser) {
+      res.status(400).json({ error: 'Email is already registered' });
       return;
     }
 
-    res.status(201).json({ message: 'User signed up successfully', data });
-  } catch (err) {
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Save user
+    const newUser = new UserModel({
+      email,
+      password: hashedPassword,
+      first_name: firstName,
+      last_name: lastName,
+      phone,
+      role
+    });
+
+    await newUser.save();
+
+    // Trigger welcome email asynchronously (fire & forget)
+    sendWelcomeEmail(email, `${firstName} ${lastName}`);
+
+    // Generate JWT token automatically for instant authentication
+    const token = jwt.sign(
+      { id: newUser._id.toString(), role: newUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // Map response user matching frontend requirements
+    const userData = {
+      session: {
+        access_token: token
+      },
+      user: {
+        id: newUser._id.toString(),
+        email: newUser.email,
+        user_metadata: {
+          first_name: newUser.first_name,
+          last_name: newUser.last_name,
+          role: newUser.role,
+          phone: newUser.phone,
+          avatar_url: newUser.avatar_url,
+          title: newUser.title,
+          bio: newUser.bio,
+          linkedin_url: newUser.linkedin_url
+        }
+      }
+    };
+
+    res.status(201).json({ message: 'User signed up successfully', data: userData });
+  } catch (err: any) {
+    console.error("Signup error:", err);
     res.status(500).json({ error: 'Sign up failed' });
   }
 };
@@ -81,30 +131,58 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
 
     const { email, password } = parsedData.data;
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-    if (error) {
-      res.status(400).json({ error: error.message });
+    const user = await UserModel.findOne({ email });
+    if (!user) {
+      res.status(400).json({ error: 'Invalid email or password' });
       return;
     }
 
-    res.status(200).json({ message: 'User signed in successfully', data });
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      res.status(400).json({ error: 'Invalid email or password' });
+      return;
+    }
+
+    const token = jwt.sign(
+      { id: user._id.toString(), role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    const responseData = {
+      session: {
+        access_token: token
+      },
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        user_metadata: {
+          first_name: user.first_name,
+          last_name: user.last_name,
+          role: user.role,
+          phone: user.phone,
+          avatar_url: user.avatar_url,
+          title: user.title,
+          bio: user.bio,
+          linkedin_url: user.linkedin_url
+        }
+      }
+    };
+
+    res.status(200).json({ message: 'User signed in successfully', data: responseData });
   } catch (err) {
+    console.error("Signin error:", err);
     res.status(500).json({ error: 'Sign in failed' });
   }
 };
 
-// Example protected route handler
 export const getProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  // The 'user' is populated by requireAuth middleware
   const user = req.user;
   res.status(200).json({
-    message: 'This is a protected route. You are authenticated!',
+    message: 'Authenticated successfully!',
     user
   });
 };
-
-import { cloudinary } from '../config/cloudinary';
 
 export const updateUser = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -113,7 +191,6 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
 
     let finalAvatarUrl = avatar_url;
 
-    // Fast check if avatar_url is Base64 image
     if (avatar_url && avatar_url.startsWith('data:image')) {
       const myCloud = await cloudinary.uploader.upload(avatar_url, {
         folder: "users",
@@ -121,35 +198,34 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       finalAvatarUrl = myCloud.secure_url;
     }
 
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id as string, {
-      user_metadata: {
-        ...(role && { role }),
-        ...(title && { title }),
-        ...(finalAvatarUrl && { avatar_url: finalAvatarUrl })
-      }
-    });
-
-    if (authError) {
-      res.status(400).json({ error: authError.message });
+    const user = await UserModel.findById(id);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // Attempt to update public users table safely
-    const updateData: any = { id };
-    if (role) updateData.role = role;
-    if (title) updateData.title = title;
-    if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
+    if (role) user.role = role;
+    if (title !== undefined) user.title = title;
+    if (finalAvatarUrl !== undefined) user.avatar_url = finalAvatarUrl;
 
-    // Supplement with current metadata
-    const userMeta = authData.user.user_metadata;
-    if (userMeta?.first_name) updateData.first_name = userMeta.first_name;
-    if (userMeta?.last_name) updateData.last_name = userMeta.last_name;
+    await user.save();
 
-    if (Object.keys(updateData).length > 1) {
-      await supabaseAdmin.from('users').upsert(updateData);
-    }
+    const supabaseStyleUser = {
+      id: user._id.toString(),
+      email: user.email,
+      user_metadata: {
+        first_name: user.first_name,
+        last_name: user.last_name,
+        role: user.role,
+        avatar_url: user.avatar_url,
+        phone: user.phone,
+        title: user.title,
+        bio: user.bio,
+        linkedin_url: user.linkedin_url
+      }
+    };
 
-    res.status(200).json({ message: 'User updated successfully', user: authData.user });
+    res.status(200).json({ message: 'User updated successfully', user: supabaseStyleUser });
   } catch (err) {
     console.error("Update User Error:", err);
     res.status(500).json({ error: 'Failed to update user' });
@@ -168,7 +244,6 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
 
     let finalAvatarUrl = avatar_url;
 
-    // Fast check if avatar_url is Base64 image
     if (avatar_url && avatar_url.startsWith('data:image')) {
       const myCloud = await cloudinary.uploader.upload(avatar_url, {
         folder: "users",
@@ -176,35 +251,35 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
       finalAvatarUrl = myCloud.secure_url;
     }
 
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.updateUserById(id, {
-      user_metadata: {
-        ...(title !== undefined && { title }),
-        ...(finalAvatarUrl !== undefined && { avatar_url: finalAvatarUrl }),
-        ...(bio !== undefined && { bio }),
-        ...(linkedin_url !== undefined && { linkedin_url })
-      }
-    });
-
-    if (authError) {
-      res.status(400).json({ error: authError.message });
+    const dbUser = await UserModel.findById(id);
+    if (!dbUser) {
+      res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    // Update public users table
-    const updateData: any = { id };
-    if (title) updateData.title = title;
-    if (finalAvatarUrl) updateData.avatar_url = finalAvatarUrl;
+    if (title !== undefined) dbUser.title = title;
+    if (finalAvatarUrl !== undefined) dbUser.avatar_url = finalAvatarUrl;
+    if (bio !== undefined) dbUser.bio = bio;
+    if (linkedin_url !== undefined) dbUser.linkedin_url = linkedin_url;
 
-    // Supplement with current metadata
-    const userMeta = authData.user.user_metadata;
-    if (userMeta?.first_name) updateData.first_name = userMeta.first_name;
-    if (userMeta?.last_name) updateData.last_name = userMeta.last_name;
+    await dbUser.save();
 
-    if (Object.keys(updateData).length > 1) {
-      await supabaseAdmin.from('users').upsert(updateData);
-    }
+    const supabaseStyleUser = {
+      id: dbUser._id.toString(),
+      email: dbUser.email,
+      user_metadata: {
+        first_name: dbUser.first_name,
+        last_name: dbUser.last_name,
+        role: dbUser.role,
+        avatar_url: dbUser.avatar_url,
+        phone: dbUser.phone,
+        title: dbUser.title,
+        bio: dbUser.bio,
+        linkedin_url: dbUser.linkedin_url
+      }
+    };
 
-    res.status(200).json({ message: 'Profile updated successfully', user: authData.user });
+    res.status(200).json({ message: 'Profile updated successfully', user: supabaseStyleUser });
   } catch (err) {
     console.error("Update Profile Error:", err);
     res.status(500).json({ error: 'Failed to update profile' });
@@ -213,24 +288,17 @@ export const updateProfile = async (req: AuthenticatedRequest, res: Response): P
 
 export const getPublicInstructors = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { data: { users }, error } = await supabaseAdmin.auth.admin.listUsers();
+    const instructors = await UserModel.find({ role: 'instructor' });
 
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
+    const mappedInstructors = instructors.map(u => ({
+      id: u._id.toString(),
+      first_name: u.first_name || '',
+      last_name: u.last_name || '',
+      avatar_url: u.avatar_url || '',
+      title: u.title || ''
+    }));
 
-    const instructors = users
-      .filter(u => u.user_metadata?.role === 'instructor')
-      .map(u => ({
-        id: u.id,
-        first_name: u.user_metadata?.first_name || '',
-        last_name: u.user_metadata?.last_name || '',
-        avatar_url: u.user_metadata?.avatar_url || '',
-        title: u.user_metadata?.title || ''
-      }));
-
-    res.status(200).json({ instructors });
+    res.status(200).json({ instructors: mappedInstructors });
   } catch (err) {
     console.error("Fetch Instructors Error:", err);
     res.status(500).json({ error: 'Failed to fetch instructors' });
@@ -241,37 +309,94 @@ export const getInstructorById = async (req: Request, res: Response): Promise<vo
   try {
     const { id } = req.params;
 
-    if (typeof id !== 'string') {
-      res.status(400).json({ error: 'Invalid instructor ID' });
-      return;
-    }
-
-    const { data: { user }, error } = await supabaseAdmin.auth.admin.getUserById(id);
-
-    if (error || !user) {
-      res.status(404).json({ error: 'Instructor not found' });
-      return;
-    }
-
-    if (user.user_metadata?.role !== 'instructor') {
+    const user = await UserModel.findOne({ _id: id, role: 'instructor' });
+    if (!user) {
       res.status(404).json({ error: 'Instructor not found' });
       return;
     }
 
     const instructor = {
-      id: user.id,
-      first_name: user.user_metadata?.first_name || '',
-      last_name: user.user_metadata?.last_name || '',
-      avatar_url: user.user_metadata?.avatar_url || '',
-      title: user.user_metadata?.title || '',
+      id: user._id.toString(),
+      first_name: user.first_name || '',
+      last_name: user.last_name || '',
+      avatar_url: user.avatar_url || '',
+      title: user.title || '',
       email: user.email || '',
-      bio: user.user_metadata?.bio || '',
-      phone: user.user_metadata?.phone || ''
+      bio: user.bio || '',
+      phone: user.phone || ''
     };
 
     res.status(200).json({ instructor });
   } catch (err) {
     console.error("Fetch Instructor Error:", err);
     res.status(500).json({ error: 'Failed to fetch instructor' });
+  }
+};
+
+// POST /forgot-password
+export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      res.status(400).json({ error: "Email is required" });
+      return;
+    }
+
+    const user = await UserModel.findOne({ email });
+    if (!user) {
+      res.status(404).json({ error: "No account registered with this email" });
+      return;
+    }
+
+    // Generate reset token (valid for 1 hour)
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = token;
+    user.resetPasswordExpires = new Date(Date.now() + 3600000); // 1 hour
+
+    await user.save();
+
+    // Trigger email send
+    sendPasswordResetEmail(email, token);
+
+    res.status(200).json({ message: "Password reset link sent to your email" });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: "Failed to request password reset" });
+  }
+};
+
+// POST /reset-password
+export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { password, token } = req.body;
+    if (!password || !token) {
+      res.status(400).json({ error: "Password and token are required" });
+      return;
+    }
+
+    const user = await UserModel.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      res.status(400).json({ error: "Invalid or expired reset token" });
+      return;
+    }
+
+    // Hash the new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    user.password = hashedPassword;
+    user.resetPasswordToken = '';
+    user.resetPasswordExpires = undefined;
+
+    await user.save();
+
+    res.status(200).json({ message: "Password reset successfully" });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: "Failed to reset password" });
   }
 };

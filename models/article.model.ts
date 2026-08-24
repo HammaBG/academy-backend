@@ -1,7 +1,9 @@
+import mongoose, { Schema } from 'mongoose';
 import { z } from 'zod';
 
 export interface Article {
-  id: string;
+  id?: string;
+  _id?: string;
   title: string;
   content: string;
   status: 'draft' | 'published';
@@ -13,7 +15,6 @@ export interface Article {
   created_at?: string;
 }
 
-// Validation schemas with Zod
 export const createArticleSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   content: z.string().min(1, 'Content is required'),
@@ -26,6 +27,17 @@ export const createArticleSchema = z.object({
 
 export const updateArticleSchema = createArticleSchema.partial();
 
-// Types derived from schemas for better integration
-export type CreateArticleInput = z.infer<typeof createArticleSchema>;
-export type UpdateArticleInput = z.infer<typeof updateArticleSchema>;
+const ArticleSchema = new Schema({
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  status: { type: String, enum: ['draft', 'published'], default: 'draft' },
+  excerpt: { type: String, default: '' },
+  image_url: { type: String, default: '' },
+  category_id: { type: String, default: '' },
+  category_name: { type: String, default: '' },
+  category_color: { type: String, default: '' }
+}, {
+  timestamps: true
+});
+
+export const Article = mongoose.models.Article || mongoose.model('Article', ArticleSchema);

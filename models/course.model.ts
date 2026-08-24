@@ -1,9 +1,13 @@
+import mongoose, { Schema } from "mongoose";
 import { z } from "zod";
 
 export interface IComment {
+  id?: string;
+  _id?: string;
   user: any;
   question: string;
   question_replies: IComment[];
+  created_at?: string;
 }
 
 export interface IReview {
@@ -11,6 +15,7 @@ export interface IReview {
   rating?: number;
   comment: string;
   comment_replies?: IReview[];
+  created_at?: string;
 }
 
 export interface ILink {
@@ -37,6 +42,7 @@ export interface ITest {
 
 export interface ICourseData {
   id?: string;
+  _id?: string;
   title: string;
   description: string;
   video_url: string;
@@ -50,7 +56,8 @@ export interface ICourseData {
 }
 
 export interface ICourse {
-  id: string;
+  id?: string;
+  _id?: string;
   name: string;
   description: string;
   short_description: string;
@@ -98,7 +105,7 @@ export const createCourseSchema = z.object({
   demo_url: z.string().optional(),
   benefits: z.array(z.object({ title: z.string() })),
   prerequisites: z.array(z.object({ title: z.string() })),
-  course_data: z.array(z.any()), // More detailed validation can be added
+  course_data: z.array(z.any()),
   test: z.any().optional(),
   status: z.boolean().default(false),
   ready: z.boolean().default(false),
@@ -108,3 +115,73 @@ export const createCourseSchema = z.object({
 });
 
 export const updateCourseSchema = createCourseSchema.partial();
+
+// Mongoose Schemas
+const CommentSchema = new Schema({
+  id: { type: String },
+  user: { type: Object, required: true },
+  question: { type: String, required: true },
+  question_replies: { type: [Object], default: [] },
+  created_at: { type: Date, default: Date.now }
+}, { _id: true });
+
+const LinkSchema = new Schema({
+  title: { type: String, required: true },
+  url: { type: String, required: true },
+  public_id: { type: String },
+  source: { type: String, enum: ["url", "file"], default: "url" }
+});
+
+const CourseDataSchema = new Schema({
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  video_url: { type: String, required: true },
+  video_thumbnail: { type: Object },
+  video_section: { type: String, required: true },
+  video_length: { type: Number, default: 0 },
+  video_player: { type: String, default: "" },
+  links: { type: [LinkSchema], default: [] },
+  suggestion: { type: String, default: "" },
+  questions: { type: [CommentSchema], default: [] }
+}, { _id: true });
+
+const ReviewSchema = new Schema({
+  user: { type: Object, required: true },
+  rating: { type: Number, default: 0 },
+  comment: { type: String, required: true },
+  comment_replies: { type: [Object], default: [] },
+  created_at: { type: Date, default: Date.now }
+});
+
+const CourseSchema = new Schema({
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  short_description: { type: String, required: true },
+  categories: { type: String, required: true },
+  price: { type: Number, default: 0 },
+  estimated_price: { type: Number, default: 0 },
+  thumbnail: {
+    public_id: { type: String, default: "" },
+    url: { type: String, default: "" }
+  },
+  tags: { type: String, required: true },
+  level: { type: String, required: true },
+  demo_url: { type: String, default: "" },
+  benefits: { type: [{ title: String }], default: [] },
+  prerequisites: { type: [{ title: String }], default: [] },
+  reviews: { type: [ReviewSchema], default: [] },
+  course_data: { type: [CourseDataSchema], default: [] },
+  ratings: { type: Number, default: 0 },
+  purchased: { type: Number, default: 0 },
+  creator: { type: String, required: true },
+  status: { type: Boolean, default: false },
+  ready: { type: Boolean, default: false },
+  url: { type: String, default: "" },
+  test: { type: Object, default: {} },
+  fake_user: { type: Number, default: 0 },
+  display_order: { type: Number, default: 0 }
+}, {
+  timestamps: true
+});
+
+export const Course = mongoose.models.Course || mongoose.model("Course", CourseSchema);

@@ -3,41 +3,29 @@ import { CatchAsyncError } from "../utils/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
 import { cloudinary } from "../config/cloudinary";
 import { createCourse, getAllCoursesService } from "../services/course.service";
-import { supabaseAdmin } from "../config/supabase";
 import { redis } from "../config/redis";
 import axios from "axios";
-import { createCourseSchema, updateCourseSchema } from "../models/course.model";
-import { User } from "@supabase/supabase-js";
+import { createCourseSchema, updateCourseSchema, Course } from "../models/course.model";
+import { User as UserModel } from "../models/user.model";
+import { Category as CategoryModel } from "../models/category.model";
+import { Enrollment } from "../models/enrollment.model";
 
 // Helper to fetch instructor data from users table OR Supabase Auth metadata
 const fetchInstructorData = async (userId: string) => {
   try {
-    // 1. Try public users table
-    const { data: userData } = await supabaseAdmin
-      .from('users')
-      .select('id, first_name, last_name, avatar_url, title')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (userData) return userData;
-
-    // 2. Fallback to Supabase Auth metadata
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
-
-    if (authError || !user) {
-      return { first_name: "Academy", last_name: "Instructor", title: "Senior Expert" };
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return { id: userId, first_name: "Academy", last_name: "Instructor", title: "Senior Expert", avatar_url: "" };
     }
-
-    const meta = user.user_metadata || {};
     return {
-      id: user.id,
-      first_name: meta.first_name || user.email?.split('@')[0] || "Academy",
-      last_name: meta.last_name || "Instructor",
-      avatar_url: meta.avatar_url || "",
-      title: meta.title || "Senior Expert"
+      id: user._id.toString(),
+      first_name: user.first_name,
+      last_name: user.last_name,
+      avatar_url: user.avatar_url,
+      title: user.title || "Senior Expert"
     };
   } catch (err) {
-    return { first_name: "Academy", last_name: "Instructor", title: "Senior Expert" };
+    return { id: userId, first_name: "Academy", last_name: "Instructor", title: "Senior Expert", avatar_url: "" };
   }
 };
 
@@ -45,15 +33,15 @@ const fetchInstructorData = async (userId: string) => {
 const enrichCoursesWithCategoryColor = async (courses: any[]): Promise<any[]> => {
   if (!courses || courses.length === 0) return courses;
   try {
-    const { data: categories } = await supabaseAdmin
-      .from('categories')
-      .select('name, color');
+    const categories = await CategoryModel.find({}, 'name color');
     if (categories && categories.length > 0) {
       const catColorMap = new Map(categories.map(c => [c.name.toLowerCase().trim(), c.color]));
       return courses.map(course => {
-        const catName = (course.categories || '').toLowerCase().trim();
+        const doc = course.toObject ? course.toObject() : course;
+        const catName = (doc.categories || '').toLowerCase().trim();
         return {
-          ...course,
+          ...doc,
+          id: doc._id?.toString() || doc.id,
           category_color: catColorMap.get(catName) || '#F95353'
         };
       });
@@ -61,7 +49,10 @@ const enrichCoursesWithCategoryColor = async (courses: any[]): Promise<any[]> =>
   } catch (err) {
     console.error('Course category enrichment error:', err);
   }
-  return courses.map(c => ({ ...c, category_color: '#F95353' }));
+  return courses.map(c => {
+    const doc = c.toObject ? c.toObject() : c;
+    return { ...doc, id: doc._id?.toString() || doc.id, category_color: '#F95353' };
+  });
 };
 
 // upload course
@@ -94,17 +85,10 @@ export const uploadCourse = CatchAsyncError(
       // Hydrate creator for the immediate response
       const hydratedCreator = await fetchInstructorData(data.creator);
 
-      const { data: newCourse, error } = await supabaseAdmin
-        .from('courses')
-        .insert(data)
-        .select()
-        .single();
+      const course = new Course(data);
+      await course.save();
 
-      if (error) {
-        return next(new ErrorHandler(error.message, 400));
-      }
-
-      const [enrichedCourse] = await enrichCoursesWithCategoryColor([newCourse]);
+      const [enrichedCourse] = await enrichCoursesWithCategoryColor([course]);
 
       res.status(201).json({
         success: true,
@@ -124,21 +108,16 @@ export const editCourse = CatchAsyncError(
       let data = req.body;
       const courseId = req.params.id;
 
-      const { data: courseData, error: fetchError } = await supabaseAdmin
-        .from('courses')
-        .select('*')
-        .eq('id', courseId)
-        .single();
-
-      if (fetchError || !courseData) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler('Course not found', 404));
       }
 
       const thumbnail = data.thumbnail;
 
       if (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('data:')) {
-        if (courseData.thumbnail?.public_id) {
-          await cloudinary.uploader.destroy(courseData.thumbnail.public_id);
+        if (course.thumbnail?.public_id) {
+          await cloudinary.uploader.destroy(course.thumbnail.public_id);
         }
 
         const myCloud = await cloudinary.uploader.upload(thumbnail, {
@@ -156,30 +135,21 @@ export const editCourse = CatchAsyncError(
         return next(new ErrorHandler(JSON.stringify(parsed.error.format()), 400));
       }
 
-      const { data: updatedCourse, error: updateError } = await supabaseAdmin
-        .from('courses')
-        .update(data)
-        .eq('id', courseId)
-        .select()
-        .single();
-
-      if (updateError) {
-        return next(new ErrorHandler(updateError.message, 400));
-      }
+      Object.assign(course, data);
+      await course.save();
 
       // Update Redis
       const redisKeyById = `course:${courseId}`;
-      await redis.set(redisKeyById, JSON.stringify(updatedCourse));
+      await redis.set(redisKeyById, JSON.stringify(course));
 
-      // Also clear by URL if it exists to be safe
-      if (updatedCourse.url) {
-        await redis.del(`course:${updatedCourse.url}`);
+      if (course.url) {
+        await redis.del(`course:${course.url}`);
       }
 
       // Hydrate for immediate response
-      const hydratedCreator = await fetchInstructorData(updatedCourse.creator);
+      const hydratedCreator = await fetchInstructorData(course.creator);
 
-      const [enrichedCourse] = await enrichCoursesWithCategoryColor([updatedCourse]);
+      const [enrichedCourse] = await enrichCoursesWithCategoryColor([course]);
 
       res.status(200).json({
         success: true,
@@ -198,7 +168,6 @@ export const getSingleCourse = CatchAsyncError(
       const courseId = req.params.id;
       console.log(`[DEBUG] Attempting to fetch course: ${courseId}`);
 
-      // Try Redis first
       const cachedCourse = await redis.get(`course:${courseId}`);
       if (cachedCourse) {
         return res.status(200).json({
@@ -207,44 +176,31 @@ export const getSingleCourse = CatchAsyncError(
         });
       }
 
-      let { data: course, error } = await supabaseAdmin
-        .from('courses')
-        .select('*')
-        .eq('url', courseId)
-        .maybeSingle();
+      // Try finding by URL first, then ID
+      let course = await Course.findOne({ url: courseId });
 
-      if (error) {
-        console.error("[DEBUG] Supabase error (URL):", error);
+      if (!course) {
+        // Try finding by MongoDB ID
+        if (courseId.match(/^[0-9a-fA-F]{24}$/)) {
+          course = await Course.findById(courseId);
+        }
       }
 
-      if (error || !course) {
-        console.log("[DEBUG] Not found by URL, trying ID...");
-        const { data: courseById, error: errorId } = await supabaseAdmin
-          .from('courses')
-          .select('*')
-          .eq('id', courseId)
-          .maybeSingle();
-
-        if (errorId) {
-          console.error("[DEBUG] Supabase error (ID):", errorId);
-        }
-
-        if (!courseById) {
-          console.warn(`[DEBUG] Course not found for ID: ${courseId}`);
-          return next(new ErrorHandler('Course not found', 404));
-        }
-
-        course = courseById;
+      if (!course) {
+        return next(new ErrorHandler('Course not found', 404));
       }
 
-      // Manually fetch creator info since foreign key relation is missing/misnamed in DB
-      if (course && course.creator && typeof course.creator === 'string') {
-        course.creator = await fetchInstructorData(course.creator);
+      let enrichedCreator = null;
+      if (course.creator && typeof course.creator === 'string') {
+        enrichedCreator = await fetchInstructorData(course.creator);
       }
 
       const [enrichedCourse] = await enrichCoursesWithCategoryColor([course]);
+      if (enrichedCreator) {
+        enrichedCourse.creator = enrichedCreator;
+      }
 
-      await redis.set(`course:${courseId}`, JSON.stringify(enrichedCourse), "EX", 604800); // 7days
+      await redis.set(`course:${courseId}`, JSON.stringify(enrichedCourse), "EX", 604800);
 
       res.status(200).json({
         success: true,
@@ -260,25 +216,19 @@ export const getSingleCourse = CatchAsyncError(
 export const getAllCourses = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { data: courses, error } = await supabaseAdmin
-        .from('courses')
-        .select('id, name, description, short_description, price, estimated_price, thumbnail, ratings, purchased, level, categories, ready, status, creator')
-        .eq('status', true)
-        .order('ready', { ascending: true });
+      const courses = await Course.find({ status: true }).sort({ ready: 1 });
 
-      if (error) {
-        return next(new ErrorHandler(error.message, 400));
-      }
-
-      // Hydrate creator data for each course
       const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
         if (course.creator && typeof course.creator === 'string') {
+          const doc = course.toObject();
           return {
-            ...course,
+            ...doc,
+            id: doc._id.toString(),
             creator: await fetchInstructorData(course.creator)
           };
         }
-        return course;
+        const doc = course.toObject();
+        return { ...doc, id: doc._id.toString() };
       }));
 
       const enrichedCourses = await enrichCoursesWithCategoryColor(hydratedCourses);
@@ -300,13 +250,8 @@ export const getCourseByUser = CatchAsyncError(
       const user = (req as any).user;
       const courseId = req.params.id;
 
-      const { data: course, error } = await supabaseAdmin
-        .from('courses')
-        .select('*')
-        .eq('id', courseId)
-        .single();
-
-      if (error || !course) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler("Course not found", 404));
       }
 
@@ -314,35 +259,30 @@ export const getCourseByUser = CatchAsyncError(
       const userId = user.id;
 
       if (role === "admin") {
+        const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
         return res.status(200).json({
           success: true,
-          course,
+          course: enrichedCourse,
         });
       }
 
-      // Check enrollment (this logic depends on your user/enrollment schema in Supabase)
-      // Assuming a table 'enrollments' exists
-      const { data: enrollment, error: enrollError } = await supabaseAdmin
-        .from('enrollments')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('course_id', courseId)
-        .single();
+      const enrollment = await Enrollment.findOne({ user_id: userId, course_id: courseId });
 
-      if (enrollError || !enrollment) {
-        // Also check if teacher owns it
+      if (!enrollment) {
         if (role === "instructor" && course.creator === userId) {
+          const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
           return res.status(200).json({
             success: true,
-            course,
+            course: enrichedCourse,
           });
         }
         return next(new ErrorHandler("You are not eligible to access this course", 403));
       }
 
+      const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
       return res.status(200).json({
         success: true,
-        course,
+        course: enrichedCourse,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -357,13 +297,8 @@ export const addQuestion = CatchAsyncError(
       const { question, courseId, contentId } = req.body;
       const user = (req as any).user;
 
-      const { data: course, error: fetchError } = await supabaseAdmin
-        .from('courses')
-        .select('course_data')
-        .eq('id', courseId)
-        .single();
-
-      if (fetchError || !course) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler('Course not found', 404));
       }
 
@@ -391,21 +326,17 @@ export const addQuestion = CatchAsyncError(
         created_at: new Date().toISOString()
       };
 
-      courseData[contentIndex].questions = courseData[contentIndex].questions || [];
-      courseData[contentIndex].questions.push(newQuestion);
+      course.course_data[contentIndex].questions = course.course_data[contentIndex].questions || [];
+      course.course_data[contentIndex].questions.push(newQuestion as any);
 
-      const { error: updateError } = await supabaseAdmin
-        .from('courses')
-        .update({ course_data: courseData })
-        .eq('id', courseId);
+      course.markModified('course_data');
+      await course.save();
 
-      if (updateError) {
-        return next(new ErrorHandler(updateError.message, 400));
-      }
+      const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
 
       res.status(200).json({
         success: true,
-        course: { ...course, course_data: courseData },
+        course: enrichedCourse,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -420,13 +351,8 @@ export const addAnswer = CatchAsyncError(
       const { answer, courseId, contentId, questionId } = req.body;
       const user = (req as any).user;
 
-      const { data: course, error: fetchError } = await supabaseAdmin
-        .from('courses')
-        .select('course_data')
-        .eq('id', courseId)
-        .single();
-
-      if (fetchError || !course) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler('Course not found', 404));
       }
 
@@ -459,21 +385,17 @@ export const addAnswer = CatchAsyncError(
         created_at: new Date().toISOString(),
       };
 
-      questions[questionIndex].question_replies = questions[questionIndex].question_replies || [];
-      questions[questionIndex].question_replies.push(newAnswer);
+      course.course_data[contentIndex].questions[questionIndex].question_replies = course.course_data[contentIndex].questions[questionIndex].question_replies || [];
+      course.course_data[contentIndex].questions[questionIndex].question_replies.push(newAnswer as any);
 
-      const { error: updateError } = await supabaseAdmin
-        .from('courses')
-        .update({ course_data: courseData })
-        .eq('id', courseId);
+      course.markModified('course_data');
+      await course.save();
 
-      if (updateError) {
-        return next(new ErrorHandler(updateError.message, 400));
-      }
+      const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
 
       res.status(200).json({
         success: true,
-        course: { ...course, course_data: courseData },
+        course: enrichedCourse,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -489,25 +411,13 @@ export const addReview = CatchAsyncError(
       const courseId = req.params.id;
       const { review, rating } = req.body;
 
-      // Check enrollment
-      const { data: enrollment, error: enrollError } = await supabaseAdmin
-        .from('enrollments')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('course_id', courseId)
-        .single();
-
-      if (enrollError || !enrollment) {
+      const enrollment = await Enrollment.findOne({ user_id: user.id, course_id: courseId });
+      if (!enrollment) {
         return next(new ErrorHandler("You are not eligible to access this course", 403));
       }
 
-      const { data: course, error: fetchError } = await supabaseAdmin
-        .from('courses')
-        .select('reviews, ratings')
-        .eq('id', courseId)
-        .single();
-
-      if (fetchError || !course) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler('Course not found', 404));
       }
 
@@ -530,22 +440,17 @@ export const addReview = CatchAsyncError(
         avg += rev.rating;
       });
 
-      const ratings = avg / reviews.length;
+      course.reviews = reviews;
+      course.ratings = avg / reviews.length;
+      await course.save();
 
-      const { error: updateError } = await supabaseAdmin
-        .from('courses')
-        .update({ reviews, ratings })
-        .eq('id', courseId);
+      const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
 
-      if (updateError) {
-        return next(new ErrorHandler(updateError.message, 400));
-      }
-
-      await redis.set(`course:${courseId}`, JSON.stringify({ ...course, reviews, ratings }), "EX", 604800);
+      await redis.set(`course:${courseId}`, JSON.stringify(enrichedCourse), "EX", 604800);
 
       res.status(200).json({
         success: true,
-        course: { ...course, reviews, ratings },
+        course: enrichedCourse,
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
@@ -574,23 +479,18 @@ export const getInstructorCourses = CatchAsyncError(
         return next(new ErrorHandler("Unauthorized", 401));
       }
 
-      const { data: courses, error } = await supabaseAdmin
-        .from('courses')
-        .select('*')
-        .eq('creator', userId)
-        .order('created_at', { ascending: false });
+      const courses = await Course.find({ creator: userId }).sort({ createdAt: -1 });
 
-      if (error) {
-        return next(new ErrorHandler(error.message, 400));
-      }
-
-      // Hydrate creator data
       const creatorData = await fetchInstructorData(userId);
 
-      const hydratedCourses = (courses || []).map((course) => ({
-        ...course,
-        creator: creatorData,
-      }));
+      const hydratedCourses = (courses || []).map((course) => {
+        const doc = course.toObject();
+        return {
+          ...doc,
+          id: doc._id.toString(),
+          creator: creatorData,
+        };
+      });
 
       res.status(200).json({
         success: true,
@@ -608,12 +508,8 @@ export const deleteCourse = CatchAsyncError(
     try {
       const { id } = req.params;
 
-      const { error } = await supabaseAdmin
-        .from('courses')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
+      const course = await Course.findByIdAndDelete(id);
+      if (!course) {
         return next(new ErrorHandler("Course not found or failed to delete", 404));
       }
 
@@ -629,7 +525,7 @@ export const deleteCourse = CatchAsyncError(
   }
 );
 
-// generate video url (using VdoCipher if configured)
+// generate video url
 export const generateVideoUrl = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -668,45 +564,26 @@ export const assignCourseToUser = CatchAsyncError(
         return next(new ErrorHandler("User ID and Course ID are required", 400));
       }
 
-      // Check if user exists
-      const { data: user, error: userError } = await supabaseAdmin.auth.admin.getUserById(userId);
-      if (userError || !user) {
+      const user = await UserModel.findById(userId);
+      if (!user) {
         return next(new ErrorHandler("User not found", 404));
       }
 
-      // Check if course exists
-      const { data: course, error: courseError } = await supabaseAdmin
-        .from('courses')
-        .select('id')
-        .eq('id', courseId)
-        .single();
-      if (courseError || !course) {
+      const course = await Course.findById(courseId);
+      if (!course) {
         return next(new ErrorHandler("Course not found", 404));
       }
 
-      // Check if already enrolled
-      const { data: enrollment, error: enrollError } = await supabaseAdmin
-        .from('enrollments')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('course_id', courseId)
-        .maybeSingle();
-
+      const enrollment = await Enrollment.findOne({ user_id: userId, course_id: courseId });
       if (enrollment) {
         return next(new ErrorHandler("User is already enrolled in this course", 400));
       }
 
-      // Insert enrollment
-      const { error: insertError } = await supabaseAdmin
-        .from('enrollments')
-        .insert({
-          user_id: userId,
-          course_id: courseId,
-        });
-
-      if (insertError) {
-        return next(new ErrorHandler(insertError.message, 400));
-      }
+      const newEnrollment = new Enrollment({
+        user_id: userId,
+        course_id: courseId
+      });
+      await newEnrollment.save();
 
       res.status(200).json({
         success: true,
@@ -729,16 +606,7 @@ export const getEnrolledCourses = CatchAsyncError(
         return next(new ErrorHandler("Unauthorized", 401));
       }
 
-      // Get all enrollments for this user with course details
-      const { data: enrollments, error: enrollError } = await supabaseAdmin
-        .from('enrollments')
-        .select('course_id, created_at, progress')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (enrollError) {
-        return next(new ErrorHandler(enrollError.message, 400));
-      }
+      const enrollments = await Enrollment.find({ user_id: userId }).sort({ createdAt: -1 });
 
       if (!enrollments || enrollments.length === 0) {
         return res.status(200).json({
@@ -749,24 +617,18 @@ export const getEnrolledCourses = CatchAsyncError(
 
       const courseIds = enrollments.map((e: any) => e.course_id);
 
-      const { data: courses, error: coursesError } = await supabaseAdmin
-        .from('courses')
-        .select('id, name, description, short_description, price, estimated_price, thumbnail, creator')
-        .in('id', courseIds);
+      const courses = await Course.find({ _id: { $in: courseIds } });
 
-      if (coursesError) {
-        return next(new ErrorHandler(coursesError.message, 400));
-      }
-
-      // Hydrate creator data for each course
       const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
+        const doc = course.toObject();
         if (course.creator && typeof course.creator === 'string') {
           return {
-            ...course,
+            ...doc,
+            id: doc._id.toString(),
             creator: await fetchInstructorData(course.creator)
           };
         }
-        return course;
+        return { ...doc, id: doc._id.toString() };
       }));
 
       res.status(200).json({
@@ -778,4 +640,3 @@ export const getEnrolledCourses = CatchAsyncError(
     }
   }
 );
-

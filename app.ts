@@ -2,8 +2,8 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { env } from './config/env';
-import { supabase } from './config/supabase';
 import { redis } from './config/redis';
+import { connectDB } from './config/db';
 import authRoutes from './routes/auth.routes';
 import articleRoutes from './routes/article.routes';
 import categoryRoutes from './routes/category.routes';
@@ -14,7 +14,9 @@ import enrollmentCodeRoutes from './routes/enrollmentCode.routes';
 
 const app = express();
 
-// ✅ FIX 1: Configure CORS properly for Render
+// Connect to MongoDB
+connectDB();
+
 const corsOptions = {
   origin: process.env.CORS_ORIGIN 
     ? process.env.CORS_ORIGIN.split(',')
@@ -30,15 +32,11 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// ✅ FIX 2: Use configured CORS
 app.use(cors(corsOptions));
-
-// ✅ FIX 3: Handle preflight requests
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// ✅ FIX 4: Health check endpoint (useful for Render)
 app.get('/api/health', (req: Request, res: Response) => {
   res.status(200).json({
     status: 'ok',
@@ -48,7 +46,6 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// ✅ FIX 5: Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/categories', categoryRoutes);
@@ -57,7 +54,6 @@ app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/forms', formRoutes);
 app.use('/api/enrollment-codes', enrollmentCodeRoutes);
 
-// ✅ FIX 6: 404 handler
 app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,
@@ -65,7 +61,6 @@ app.use((req: Request, res: Response) => {
   });
 });
 
-// ✅ FIX 7: Error handler
 app.use((err: any, req: Request, res: Response, next: any) => {
   console.error('Error:', err.message);
   res.status(err.status || 500).json({
@@ -74,14 +69,13 @@ app.use((err: any, req: Request, res: Response, next: any) => {
   });
 });
 
-// ✅ FIX 8: Only start server if not in test environment
 if (process.env.NODE_ENV !== 'test') {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log("================================");
-    console.log(`🚀 Server started on port ${PORT}`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 CORS Origin: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
+    console.log(`?? Server started on port ${PORT}`);
+    console.log(`?? Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`?? CORS Origin: ${process.env.CORS_ORIGIN || 'http://localhost:3000'}`);
     console.log("================================");
   });
 }

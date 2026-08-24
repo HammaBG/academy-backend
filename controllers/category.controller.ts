@@ -1,12 +1,11 @@
 import { Request, Response } from 'express';
-import { supabaseAdmin } from '../config/supabase';
 import { 
-  Category, 
+  Category as CategoryModel, 
   createCategorySchema, 
   updateCategorySchema 
 } from '../models/category.model';
 
-// POST /api/categories — create category
+// POST /api/categories ? create category
 export const createCategory = async (req: Request, res: Response): Promise<void> => {
   try {
     const parsed = createCategorySchema.safeParse(req.body);
@@ -15,40 +14,32 @@ export const createCategory = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { name, image_url, color } = parsed.data;
+    const { name, color, description } = parsed.data;
 
-    const { data, error } = await supabaseAdmin
-      .from('categories')
-      .insert({ name, image_url, color })
-      .select()
-      .returns<Category>()
-      .single();
+    const newCategory = new CategoryModel({ name, color, description });
+    await newCategory.save();
 
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
+    const data = {
+      ...newCategory.toObject(),
+      id: newCategory._id.toString()
+    };
 
     res.status(201).json({ data });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Create category error:', err);
-    res.status(500).json({ error: 'Failed to create category' });
+    res.status(500).json({ error: err.message || 'Failed to create category' });
   }
 };
 
-// GET /api/categories — get all categories
+// GET /api/categories ? get all categories
 export const getAllCategories = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { data, error } = await supabaseAdmin
-      .from('categories')
-      .select('*')
-      .order('name', { ascending: true })
-      .returns<Category[]>();
-
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
+    const categories = await CategoryModel.find().sort({ name: 1 });
+    
+    const data = categories.map(c => ({
+      ...c.toObject(),
+      id: c._id.toString()
+    }));
 
     res.status(200).json({ data });
   } catch (err) {
@@ -57,22 +48,21 @@ export const getAllCategories = async (req: Request, res: Response): Promise<voi
   }
 };
 
-// GET /api/categories/:id — get single category
+// GET /api/categories/:id ? get single category
 export const getCategoryById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
-    const { data, error } = await supabaseAdmin
-      .from('categories')
-      .select('*')
-      .eq('id', id)
-      .returns<Category>()
-      .single();
-
-    if (error) {
+    const category = await CategoryModel.findById(id);
+    if (!category) {
       res.status(404).json({ error: 'Category not found' });
       return;
     }
+
+    const data = {
+      ...category.toObject(),
+      id: category._id.toString()
+    };
 
     res.status(200).json({ data });
   } catch (err) {
@@ -81,7 +71,7 @@ export const getCategoryById = async (req: Request, res: Response): Promise<void
   }
 };
 
-// PUT /api/categories/:id — update category
+// PUT /api/categories/:id ? update category
 export const updateCategory = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -91,20 +81,24 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { name, image_url, color } = parsed.data;
+    const { name, color, description } = parsed.data;
 
-    const { data, error } = await supabaseAdmin
-      .from('categories')
-      .update({ name, image_url, color })
-      .eq('id', id)
-      .select()
-      .returns<Category>()
-      .single();
-
-    if (error) {
+    const category = await CategoryModel.findById(id);
+    if (!category) {
       res.status(404).json({ error: 'Category not found' });
       return;
     }
+
+    if (name !== undefined) category.name = name;
+    if (color !== undefined) category.color = color;
+    if (description !== undefined) category.description = description;
+
+    await category.save();
+
+    const data = {
+      ...category.toObject(),
+      id: category._id.toString()
+    };
 
     res.status(200).json({ data });
   } catch (err) {
@@ -113,17 +107,13 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
   }
 };
 
-// DELETE /api/categories/:id — delete category
+// DELETE /api/categories/:id ? delete category
 export const deleteCategory = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
-      .from('categories')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    const category = await CategoryModel.findByIdAndDelete(id);
+    if (!category) {
       res.status(404).json({ error: 'Category not found' });
       return;
     }

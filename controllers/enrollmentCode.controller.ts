@@ -1,68 +1,46 @@
 import { Request, Response } from "express";
-import { supabaseAdmin } from "../config/supabase";
 import {
   createEnrollmentCodeSchema,
   updateEnrollmentCodeSchema,
   IEnrollmentCode,
-  ICoursePrice
+  ICoursePrice,
+  EnrollmentCode as EnrollmentCodeModel
 } from "../models/enrollmentCode.model";
+import { Course as CourseModel } from "../models/course.model";
+import { User as UserModel } from "../models/user.model";
+import { Enrollment } from "../models/enrollment.model";
 import { AuthenticatedRequest } from "../middlewares/auth.middleware";
 
-// Helper: map frontend camelCase object to Postgres snake_case
-const toSnakeCase = (data: any) => ({
-  name: data.name,
-  courses: data.courses,
-  course_prices: data.coursePrices || [],
-  usage_limit: data.usageLimit || 1,
-  used_by: data.usedBy || [],
-  used: data.used || false,
-  active: data.active || true,
-});
-
-// Helper: map Postgres snake_case object to frontend camelCase
-const toCamelCase = (data: any): IEnrollmentCode => ({
-  id: data.id,
-  name: data.name,
-  courses: data.courses || [],
-  coursePrices: data.course_prices || [],
-  usageLimit: data.usage_limit || 1,
-  usedBy: data.used_by || [],
-  used: data.used || false,
-  active: data.active || true,
-  createdAt: data.created_at,
-  updatedAt: data.updated_at,
-});
+// Helper: map MongoDB document to frontend structure
+const toCamelCase = (data: any): IEnrollmentCode => {
+  const doc = data.toObject ? data.toObject() : data;
+  return {
+    id: doc._id.toString(),
+    name: doc.name,
+    courses: doc.courses || [],
+    coursePrices: doc.coursePrices || [],
+    usageLimit: doc.usageLimit || 1,
+    usedBy: doc.usedBy || [],
+    used: doc.used || false,
+    active: doc.active || true,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+};
 
 // Helper: fetch user details for rendering who used the code
 const fetchUserData = async (userId: string) => {
   try {
-    const { data: userData } = await supabaseAdmin
-      .from('users')
-      .select('id, first_name, last_name, email, avatar_url')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (userData) {
+    const user = await UserModel.findById(userId);
+    if (user) {
       return {
-        id: userData.id,
-        name: `${userData.first_name || ''} ${userData.last_name || ''}`.trim() || 'Academy Student',
-        email: userData.email || '',
-        avatar: userData.avatar_url || ''
+        id: user._id.toString(),
+        name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Academy Student',
+        email: user.email || '',
+        avatar: user.avatar_url || ''
       };
     }
-
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.admin.getUserById(userId);
-    if (authError || !user) {
-      return { id: userId, name: "Academy Student", email: "", avatar: "" };
-    }
-
-    const meta = user.user_metadata || {};
-    return {
-      id: user.id,
-      name: `${meta.first_name || ''} ${meta.last_name || ''}`.trim() || user.email?.split('@')[0] || "Academy Student",
-      email: user.email || '',
-      avatar: meta.avatar_url || ""
-    };
+    return { id: userId, name: "Academy Student", email: "", avatar: "" };
   } catch {
     return { id: userId, name: "Academy Student", email: "", avatar: "" };
   }
@@ -72,14 +50,10 @@ const fetchUserData = async (userId: string) => {
 const hydrateCoursesForCode = async (code: IEnrollmentCode) => {
   if (!code.courses || code.courses.length === 0) return code;
   try {
-    const { data: coursesData } = await supabaseAdmin
-      .from('courses')
-      .select('id, name, price')
-      .in('id', code.courses);
+    const coursesData = await CourseModel.find({ _id: { $in: code.courses } });
 
     if (coursesData) {
-      // Create a hydrated courses map
-      const courseMap = new Map(coursesData.map(c => [c.id, { name: c.name, price: Number(c.price || 0) }]));
+      const courseMap = new Map(coursesData.map(c => [c._id.toString(), { name: c.name, price: Number(c.price || 0) }]));
       
       const hydratedCourses = code.courses.map(id => {
         const match = courseMap.get(id);
@@ -121,23 +95,15 @@ export const createEnrollmentCode = async (req: Request, res: Response): Promise
     const { name, courses, usageLimit } = parsed.data;
 
     // Check if courses exist in database
-    const { data: existingCourses, error: courseFetchError } = await supabaseAdmin
-      .from('courses')
-      .select('id, name, price')
-      .in('id', courses);
-
-    if (courseFetchError || !existingCourses || existingCourses.length !== courses.length) {
+    const existingCourses = await CourseModel.find({ _id: { $in: courses } });
+    if (!existingCourses || existingCourses.length !== courses.length) {
       res.status(404).json({ success: false, error: "One or more courses not found" });
       return;
     }
 
     // Check if code name already exists
     const normalizedName = String(name).toUpperCase().trim();
-    const { data: existingCode } = await supabaseAdmin
-      .from('enrollment_codes')
-      .select('id')
-      .eq('name', normalizedName)
-      .maybeSingle();
+    const existingCode = await EnrollmentCodeModel.findOne({ name: normalizedName });
 
     if (existingCode) {
       res.status(400).json({ success: false, error: "Enrollment code with this name already exists" });
@@ -146,27 +112,17 @@ export const createEnrollmentCode = async (req: Request, res: Response): Promise
 
     // Set prices
     const coursePrices: ICoursePrice[] = existingCourses.map((c) => ({
-      courseId: c.id,
+      courseId: c._id.toString(),
       price: Number(c.price || 0),
     }));
 
-    const snakeCode = toSnakeCase({
+    const newCode = new EnrollmentCodeModel({
       name: normalizedName,
       courses,
       coursePrices,
       usageLimit,
     });
-
-    const { data: newCode, error: insertError } = await supabaseAdmin
-      .from('enrollment_codes')
-      .insert(snakeCode)
-      .select()
-      .single();
-
-    if (insertError) {
-      res.status(400).json({ success: false, error: insertError.message });
-      return;
-    }
+    await newCode.save();
 
     const rawCamel = toCamelCase(newCode);
     const hydrated = await hydrateCoursesForCode(rawCamel);
@@ -181,7 +137,6 @@ export const createEnrollmentCode = async (req: Request, res: Response): Promise
   }
 };
 
-// Zod schema check helper for creation
 const createFormSchemaForCode = (body: any) => {
   return createEnrollmentCodeSchema.safeParse(body);
 };
@@ -191,19 +146,10 @@ const createFormSchemaForCode = (body: any) => {
  */
 export const getEnrollmentCodes = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { data: codesData, error } = await supabaseAdmin
-      .from('enrollment_codes')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const codesData = await EnrollmentCodeModel.find().sort({ createdAt: -1 });
 
-    if (error) {
-      res.status(400).json({ success: false, error: error.message });
-      return;
-    }
+    const camelCodes = codesData.map(toCamelCase);
 
-    const camelCodes = (codesData || []).map(toCamelCase);
-
-    // Hydrate each code with courses and usedBy user details
     const hydratedCodes = await Promise.all(camelCodes.map(async (code) => {
       const codeWithCourses = await hydrateCoursesForCode(code);
       
@@ -246,14 +192,9 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
     const normalizedCode = String(code).toUpperCase().trim();
 
     // Find active enrollment code
-    const { data: codeData, error: fetchError } = await supabaseAdmin
-      .from('enrollment_codes')
-      .select('*')
-      .eq('name', normalizedCode)
-      .eq('active', true)
-      .maybeSingle();
+    const codeData = await EnrollmentCodeModel.findOne({ name: normalizedCode, active: true });
 
-    if (fetchError || !codeData) {
+    if (!codeData) {
       res.status(400).json({ success: false, error: "Invalid or inactive enrollment code" });
       return;
     }
@@ -279,15 +220,7 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
     }
 
     // Check which courses user is not already enrolled in
-    const { data: userEnrollments, error: enrollError } = await supabaseAdmin
-      .from('enrollments')
-      .select('course_id')
-      .eq('user_id', userId);
-
-    if (enrollError) {
-      res.status(400).json({ success: false, error: enrollError.message });
-      return;
-    }
+    const userEnrollments = await Enrollment.find({ user_id: userId });
 
     const enrolledCourseIds = new Set((userEnrollments || []).map(e => e.course_id));
 
@@ -300,24 +233,15 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
     }
 
     // Get course metadata to return in response
-    const { data: coursesData, error: coursesFetchError } = await supabaseAdmin
-      .from('courses')
-      .select('id, name, price')
-      .in('id', newCourseIds);
-
-    if (coursesFetchError) {
-      res.status(400).json({ success: false, error: coursesFetchError.message });
-      return;
-    }
+    const coursesData = await CourseModel.find({ _id: { $in: newCourseIds } });
 
     // Enroll user in each new course in parallel
     const enrollmentPromises = newCourseIds.map(async (courseId) => {
-      return await supabaseAdmin
-        .from('enrollments')
-        .insert({
-          user_id: userId,
-          course_id: courseId,
-        });
+      const newEnroll = new Enrollment({
+        user_id: userId,
+        course_id: courseId,
+      });
+      return await newEnroll.save();
     });
 
     await Promise.all(enrollmentPromises);
@@ -326,21 +250,11 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
     const updatedUsedBy = [...enrollmentCode.usedBy, userId];
     const isLimitReached = updatedUsedBy.length >= enrollmentCode.usageLimit;
 
-    const { error: updateError } = await supabaseAdmin
-      .from('enrollment_codes')
-      .update({
-        used_by: updatedUsedBy,
-        used: isLimitReached
-      })
-      .eq('id', enrollmentCode.id);
+    await EnrollmentCodeModel.findByIdAndUpdate(enrollmentCode.id, {
+      usedBy: updatedUsedBy,
+      used: isLimitReached
+    });
 
-    if (updateError) {
-      res.status(400).json({ success: false, error: updateError.message });
-      return;
-    }
-
-    // Send confirmation email note: SMTP ejs confirmation mailing is handled globally by Supabase in this stack.
-    // Logging transaction details locally:
     const totalPrice = coursesData.reduce((sum, c) => sum + Number(c.price || 0), 0);
     console.log(`[Order Confirmation Log] User ${userId} successfully used code ${enrollmentCode.name} to enroll in courses: ${coursesData.map(c => c.name).join(', ')}. Total Value: ${totalPrice}`);
 
@@ -348,8 +262,8 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
       success: true,
       message: `Successfully enrolled in ${coursesData.length} course(s)!`,
       enrolledCourses: coursesData.map(c => ({
-        id: c.id,
-        courseId: c.id,
+        id: c._id.toString(),
+        courseId: c._id.toString(),
         name: c.name,
         price: Number(c.price)
       })),
@@ -367,24 +281,9 @@ export const deleteEnrollmentCode = async (req: Request, res: Response): Promise
   try {
     const { id } = req.params;
 
-    const { data: code, error: fetchError } = await supabaseAdmin
-      .from('enrollment_codes')
-      .select('id')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (fetchError || !code) {
+    const code = await EnrollmentCodeModel.findByIdAndDelete(id);
+    if (!code) {
       res.status(404).json({ success: false, error: "Enrollment code not found" });
-      return;
-    }
-
-    const { error: deleteError } = await supabaseAdmin
-      .from('enrollment_codes')
-      .delete()
-      .eq('id', id);
-
-    if (deleteError) {
-      res.status(400).json({ success: false, error: deleteError.message });
       return;
     }
 
@@ -404,19 +303,9 @@ export const getUserEnrollmentCodes = async (req: Request, res: Response): Promi
   try {
     const { userId } = req.params;
 
-    // Fetch codes where used_by array contains the user ID
-    // In Postgrest, we can use contains filter
-    const { data: codesData, error } = await supabaseAdmin
-      .from('enrollment_codes')
-      .select('*')
-      .contains('used_by', [userId]);
+    const codesData = await EnrollmentCodeModel.find({ usedBy: userId });
 
-    if (error) {
-      res.status(400).json({ success: false, error: error.message });
-      return;
-    }
-
-    const camelCodes = (codesData || []).map(toCamelCase);
+    const camelCodes = codesData.map(toCamelCase);
 
     const hydratedCodes = await Promise.all(
       camelCodes.map(async (code) => await hydrateCoursesForCode(code))

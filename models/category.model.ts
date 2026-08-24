@@ -1,22 +1,28 @@
+import mongoose, { Schema } from 'mongoose';
 import { z } from 'zod';
 
 export interface Category {
-  id: string;
+  id?: string;
+  _id?: string;
   name: string;
-  image_url?: string;
   color?: string;
-  created_at?: string;
+  description?: string;
 }
 
-// Validation schemas with Zod
 export const createCategorySchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  image_url: z.string().optional(),
-  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid hex color').optional(),
+  color: z.string().optional(),
+  description: z.string().optional(),
 });
 
 export const updateCategorySchema = createCategorySchema.partial();
 
-// Types derived from schemas
-export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
-export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
+const CategorySchema = new Schema({
+  name: { type: String, required: true, unique: true },
+  color: { type: String, default: '#F95353' },
+  description: { type: String, default: '' }
+}, {
+  timestamps: true
+});
+
+export const Category = mongoose.models.Category || mongoose.model('Category', CategorySchema);

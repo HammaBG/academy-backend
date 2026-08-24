@@ -1,3 +1,4 @@
+import mongoose, { Schema } from "mongoose";
 import { z } from "zod";
 
 export interface INote {
@@ -7,6 +8,7 @@ export interface INote {
 
 export interface IForm {
   id?: string;
+  _id?: string;
   fullName: string;
   address: string;
   phoneNumber: string;
@@ -67,3 +69,37 @@ export const updateFormSchema = z.object({
   coursePrice: z.number().min(0).optional(),
   courseId: z.string().optional(),
 });
+
+const NoteSchema = new Schema({
+  text: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const FormSchema = new Schema({
+  fullName: { type: String, required: true },
+  address: { type: String, required: true },
+  phoneNumber: { type: String, required: true },
+  email: { type: String, default: "" },
+  courseName: { type: String, required: true },
+  coursePrice: { type: Number, required: true },
+  courseId: { type: String, required: true },
+  status: {
+    type: String,
+    enum: [
+      'pending',
+      'contacted',
+      'completed',
+      'not-interested',
+      'not-available',
+      'callback',
+      'delivered',
+      'not-delivered'
+    ],
+    default: 'pending'
+  },
+  notes: { type: [NoteSchema], default: [] }
+}, {
+  timestamps: true
+});
+
+export const Form = mongoose.models.Form || mongoose.model("Form", FormSchema);
