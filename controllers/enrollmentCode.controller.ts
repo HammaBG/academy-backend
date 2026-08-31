@@ -8,7 +8,6 @@ import {
 } from "../models/enrollmentCode.model";
 import { Course as CourseModel } from "../models/course.model";
 import { User as UserModel } from "../models/user.model";
-import { Enrollment } from "../models/enrollment.model";
 import { AuthenticatedRequest } from "../middlewares/auth.middleware";
 
 // Helper: map MongoDB document to frontend structure
@@ -81,6 +80,10 @@ const hydrateCoursesForCode = async (code: IEnrollmentCode) => {
   return code;
 };
 
+const createFormSchemaForCode = (body: any) => {
+  return createEnrollmentCodeSchema.safeParse(body);
+};
+
 /**
  * Create enrollment code with multiple courses (admin only)
  */
@@ -94,38 +97,38 @@ export const createEnrollmentCode = async (req: Request, res: Response): Promise
 
     const { name, courses, usageLimit } = parsed.data;
 
-    // Check if courses exist in database
     const existingCourses = await CourseModel.find({ _id: { $in: courses } });
     if (!existingCourses || existingCourses.length !== courses.length) {
       res.status(404).json({ success: false, error: "One or more courses not found" });
       return;
     }
 
-    // Check if code name already exists
     const normalizedName = String(name).toUpperCase().trim();
-    const existingCode = await EnrollmentCodeModel.findOne({ name: normalizedName });
 
+    const existingCode = await EnrollmentCodeModel.findOne({ name: normalizedName });
     if (existingCode) {
-      res.status(400).json({ success: false, error: "Enrollment code with this name already exists" });
+      res.status(400).json({ success: false, error: "An enrollment code with this name already exists" });
       return;
     }
 
-    // Set prices
-    const coursePrices: ICoursePrice[] = existingCourses.map((c) => ({
+    const defaultPrices: ICoursePrice[] = existingCourses.map(c => ({
       courseId: c._id.toString(),
-      price: Number(c.price || 0),
+      price: Number(c.price || 0)
     }));
 
     const newCode = new EnrollmentCodeModel({
       name: normalizedName,
       courses,
-      coursePrices,
+      coursePrices: defaultPrices,
       usageLimit,
+      usedBy: [],
+      used: false,
+      active: true,
     });
-    await newCode.save();
 
-    const rawCamel = toCamelCase(newCode);
-    const hydrated = await hydrateCoursesForCode(rawCamel);
+    await newCode.save();
+    
+    const hydrated = await hydrateCoursesForCode(toCamelCase(newCode));
 
     res.status(201).json({
       success: true,
@@ -137,34 +140,24 @@ export const createEnrollmentCode = async (req: Request, res: Response): Promise
   }
 };
 
-const createFormSchemaForCode = (body: any) => {
-  return createEnrollmentCodeSchema.safeParse(body);
-};
-
 /**
  * Get all enrollment codes (admin only)
  */
-export const getEnrollmentCodes = async (req: Request, res: Response): Promise<void> => {
+export const getAllEnrollmentCodes = async (req: Request, res: Response): Promise<void> => {
   try {
-    const codesData = await EnrollmentCodeModel.find().sort({ createdAt: -1 });
+    const codes = await EnrollmentCodeModel.find().sort({ createdAt: -1 });
 
-    const camelCodes = codesData.map(toCamelCase);
+    if (!codes || codes.length === 0) {
+      res.status(200).json({ success: true, enrollmentCodes: [] });
+      return;
+    }
 
-    const hydratedCodes = await Promise.all(camelCodes.map(async (code) => {
-      const codeWithCourses = await hydrateCoursesForCode(code);
-      
-      const usedByUsers = await Promise.all(
-        (code.usedBy || []).map(async (uid) => await fetchUserData(uid))
-      );
-
-      return {
-        ...codeWithCourses,
-        usedBy: usedByUsers
-      };
-    }));
+    const camelCodes = codes.map(toCamelCase);
+    const hydratedCodes = await Promise.all(camelCodes.map(hydrateCoursesForCode));
 
     res.status(200).json({
       success: true,
+      message: "Enrollment codes retrieved successfully",
       enrollmentCodes: hydratedCodes,
     });
   } catch (err: any) {
@@ -191,7 +184,6 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
 
     const normalizedCode = String(code).toUpperCase().trim();
 
-    // Find active enrollment code
     const codeData = await EnrollmentCodeModel.findOne({ name: normalizedCode, active: true });
 
     if (!codeData) {
@@ -201,30 +193,29 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
 
     const enrollmentCode = toCamelCase(codeData);
 
-    // Check if code is already flagged as used
     if (enrollmentCode.used) {
       res.status(400).json({ success: false, error: "Enrollment code already used" });
       return;
     }
 
-    // Check if user already used this code
     if (enrollmentCode.usedBy.includes(userId)) {
       res.status(400).json({ success: false, error: "You have already used this enrollment code" });
       return;
     }
 
-    // Check if usage limit is reached
     if (enrollmentCode.usedBy.length >= enrollmentCode.usageLimit) {
       res.status(400).json({ success: false, error: "Enrollment code usage limit reached" });
       return;
     }
 
-    // Check which courses user is not already enrolled in
-    const userEnrollments = await Enrollment.find({ user_id: userId });
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      res.status(404).json({ success: false, error: "User not found" });
+      return;
+    }
 
-    const enrolledCourseIds = new Set((userEnrollments || []).map(e => e.course_id));
+    const enrolledCourseIds = new Set(user.courses || []);
 
-    // Filter courses from enrollment code that the user does not have
     const newCourseIds = enrollmentCode.courses.filter(id => !enrolledCourseIds.has(id));
 
     if (newCourseIds.length === 0) {
@@ -232,19 +223,12 @@ export const useEnrollmentCode = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    // Get course metadata to return in response
     const coursesData = await CourseModel.find({ _id: { $in: newCourseIds } });
 
-    // Enroll user in each new course in parallel
-    const enrollmentPromises = newCourseIds.map(async (courseId) => {
-      const newEnroll = new Enrollment({
-        user_id: userId,
-        course_id: courseId,
-      });
-      return await newEnroll.save();
+    // Sync courses directly to User model courses array
+    await UserModel.findByIdAndUpdate(userId, {
+      $addToSet: { courses: { $each: newCourseIds } }
     });
-
-    await Promise.all(enrollmentPromises);
 
     // Update code usedBy list and checked status
     const updatedUsedBy = [...enrollmentCode.usedBy, userId];
@@ -299,23 +283,38 @@ export const deleteEnrollmentCode = async (req: Request, res: Response): Promise
 /**
  * Get user's used enrollment codes (admin only)
  */
-export const getUserEnrollmentCodes = async (req: Request, res: Response): Promise<void> => {
+export const getMyUsedCodes = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, error: "User authentication required" });
+      return;
+    }
 
-    const codesData = await EnrollmentCodeModel.find({ usedBy: userId });
+    const codes = await EnrollmentCodeModel.find({ usedBy: userId }).sort({ updatedAt: -1 });
 
-    const camelCodes = codesData.map(toCamelCase);
+    if (!codes || codes.length === 0) {
+      res.status(200).json({ success: true, enrollmentCodes: [] });
+      return;
+    }
 
-    const hydratedCodes = await Promise.all(
-      camelCodes.map(async (code) => await hydrateCoursesForCode(code))
-    );
+    const camelCodes = codes.map(toCamelCase);
+    const hydratedCodes = await Promise.all(camelCodes.map(hydrateCoursesForCode));
 
     res.status(200).json({
       success: true,
+      message: "My used enrollment codes retrieved successfully",
       enrollmentCodes: hydratedCodes,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Internal Server Error' });
   }
+};
+
+export default {
+  createEnrollmentCode,
+  getAllEnrollmentCodes,
+  useEnrollmentCode,
+  deleteEnrollmentCode,
+  getMyUsedCodes,
 };

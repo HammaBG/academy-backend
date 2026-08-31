@@ -1,10 +1,10 @@
 import { Router } from "express";
 import {
   createEnrollmentCode,
-  getEnrollmentCodes,
+  getAllEnrollmentCodes,
   useEnrollmentCode,
   deleteEnrollmentCode,
-  getUserEnrollmentCodes
+  getMyUsedCodes
 } from "../controllers/enrollmentCode.controller";
 import { requireAuth, authorizeRoles } from "../middlewares/auth.middleware";
 
@@ -18,9 +18,9 @@ router.use(authorizeRoles("admin"));
 
 router.route("/")
   .post(createEnrollmentCode)
-  .get(getEnrollmentCodes);
+  .get(getAllEnrollmentCodes);
 
 router.delete("/:id", deleteEnrollmentCode);
-router.get("/user/:userId", getUserEnrollmentCodes);
+router.get("/user/my-used", getMyUsedCodes);
 
 export default router;

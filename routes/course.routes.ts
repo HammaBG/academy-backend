@@ -14,7 +14,7 @@ import {
   getSingleCourse,
   uploadCourse,
   assignCourseToUser,
-
+  toggleVideoProgress
 } from "../controllers/course.controller";
 import { authorizeRoles, requireAuth } from "../middlewares/auth.middleware";
 
@@ -62,14 +62,7 @@ courseRouter.put("/add-answer", requireAuth, addAnswer);
 
 courseRouter.put("/add-review/:id", requireAuth, addReview);
 
-// add-reply to review (admin/instructor only in original code)
-courseRouter.put(
-  "/add-reply",
-  requireAuth,
-  authorizeRoles("admin", "instructor"),
-  // Note: Your original code had addReplyToReview but I didn't see the full implementation in the snippet.
-  // I will skip for now or implement if needed.
-);
+courseRouter.post("/toggle-video-progress", requireAuth, toggleVideoProgress);
 
 courseRouter.post("/getVdoCipherOTP", generateVideoUrl);
 
@@ -87,13 +80,10 @@ courseRouter.post(
   assignCourseToUser
 );
 
-
 courseRouter.get(
   "/get-enrolled-courses",
   requireAuth,
   getEnrolledCourses
 );
-
-
 
 export default courseRouter;

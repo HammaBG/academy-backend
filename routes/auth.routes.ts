@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { 
-  signUp, 
+  signUp,
+  googleLogin,
   signIn, 
   getProfile, 
   getAllUsers, 
@@ -17,6 +18,7 @@ const router = Router();
 
 // Public auth routes
 router.post('/signup', signUp);
+router.post('/google', googleLogin);
 router.post('/login', signIn);
 router.get('/instructors', getPublicInstructors);
 router.get('/instructors/:id', getInstructorById);

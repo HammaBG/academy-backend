@@ -8,7 +8,7 @@ import axios from "axios";
 import { createCourseSchema, updateCourseSchema, Course } from "../models/course.model";
 import { User as UserModel } from "../models/user.model";
 import { Category as CategoryModel } from "../models/category.model";
-import { Enrollment } from "../models/enrollment.model";
+// Enrollment import removed
 
 // Helper to fetch instructor data from users table OR Supabase Auth metadata
 const fetchInstructorData = async (userId: string) => {
@@ -266,9 +266,14 @@ export const getCourseByUser = CatchAsyncError(
         });
       }
 
-      const enrollment = await Enrollment.findOne({ user_id: userId, course_id: courseId });
+      const dbUser = await UserModel.findById(userId);
+      if (!dbUser) {
+        return next(new ErrorHandler("User not found", 404));
+      }
 
-      if (!enrollment) {
+      const isEnrolled = dbUser.courses.includes(courseId);
+
+      if (!isEnrolled) {
         if (role === "instructor" && course.creator === userId) {
           const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
           return res.status(200).json({
@@ -279,7 +284,14 @@ export const getCourseByUser = CatchAsyncError(
         return next(new ErrorHandler("You are not eligible to access this course", 403));
       }
 
-      const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
+      const progressRecord = dbUser.coursesProgress.find((p: any) => p.courseId === courseId) || { progress: 0, completedVideos: [] };
+
+      const enrichedCourse = { 
+        ...course.toObject(), 
+        id: course._id.toString(),
+        completedVideos: progressRecord.completedVideos,
+        progress: progressRecord.progress
+      };
       return res.status(200).json({
         success: true,
         course: enrichedCourse,
@@ -558,15 +570,9 @@ export const generateVideoUrl = CatchAsyncError(
 export const assignCourseToUser = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { userId, courseId } = req.body;
-
-      if (!userId || !courseId) {
-        return next(new ErrorHandler("User ID and Course ID are required", 400));
-      }
-
-      const user = await UserModel.findById(userId);
-      if (!user) {
-        return next(new ErrorHandler("User not found", 404));
+      const { courseId, userId } = req.body;
+      if (!courseId || !userId) {
+        return next(new ErrorHandler("Course ID and User ID are required", 400));
       }
 
       const course = await Course.findById(courseId);
@@ -574,16 +580,18 @@ export const assignCourseToUser = CatchAsyncError(
         return next(new ErrorHandler("Course not found", 404));
       }
 
-      const enrollment = await Enrollment.findOne({ user_id: userId, course_id: courseId });
-      if (enrollment) {
+      const user = await UserModel.findById(userId);
+      if (!user) {
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      if (user.courses.includes(courseId)) {
         return next(new ErrorHandler("User is already enrolled in this course", 400));
       }
 
-      const newEnrollment = new Enrollment({
-        user_id: userId,
-        course_id: courseId
+      await UserModel.findByIdAndUpdate(userId, {
+        $addToSet: { courses: courseId }
       });
-      await newEnrollment.save();
 
       res.status(200).json({
         success: true,
@@ -606,34 +614,101 @@ export const getEnrolledCourses = CatchAsyncError(
         return next(new ErrorHandler("Unauthorized", 401));
       }
 
-      const enrollments = await Enrollment.find({ user_id: userId }).sort({ createdAt: -1 });
-
-      if (!enrollments || enrollments.length === 0) {
+      const dbUser = await UserModel.findById(userId);
+      if (!dbUser || !dbUser.courses || dbUser.courses.length === 0) {
         return res.status(200).json({
           success: true,
           courses: [],
         });
       }
 
-      const courseIds = enrollments.map((e: any) => e.course_id);
-
-      const courses = await Course.find({ _id: { $in: courseIds } });
+      const courses = await Course.find({ _id: { $in: dbUser.courses } });
 
       const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
         const doc = course.toObject();
-        if (course.creator && typeof course.creator === 'string') {
-          return {
-            ...doc,
-            id: doc._id.toString(),
-            creator: await fetchInstructorData(course.creator)
-          };
-        }
-        return { ...doc, id: doc._id.toString() };
+        const progressList = dbUser.coursesProgress || [];
+        const progressRecord = progressList.find((p: any) => p.courseId === doc._id.toString()) || { progress: 0, completedVideos: [] };
+        const creatorData = course.creator ? await fetchInstructorData(course.creator) : undefined;
+        return {
+          ...doc,
+          id: doc._id.toString(),
+          creator: creatorData,
+          completedVideos: progressRecord.completedVideos,
+          progress: progressRecord.progress
+        };
       }));
 
       res.status(200).json({
         success: true,
         courses: hydratedCourses,
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+// toggle video progress
+export const toggleVideoProgress = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { courseId, videoSectionTitle } = req.body;
+      const user = (req as any).user;
+      const userId = user?.id;
+
+      if (!userId) {
+        return next(new ErrorHandler("Unauthorized", 401));
+      }
+
+      const dbUser = await UserModel.findById(userId);
+      if (!dbUser) {
+        return next(new ErrorHandler("User not found", 404));
+      }
+
+      const course = await Course.findById(courseId);
+      if (!course) {
+        return next(new ErrorHandler("Course not found", 404));
+      }
+
+      const courseDataList = course.course_data || [];
+      const totalVideos = courseDataList.length;
+
+      if (!dbUser.coursesProgress) {
+        dbUser.coursesProgress = [];
+      }
+      let progressRecord = dbUser.coursesProgress.find((p: any) => p.courseId === courseId);
+      if (!progressRecord) {
+        const newProg = {
+          courseId,
+          progress: 0,
+          completedVideos: []
+        };
+        dbUser.coursesProgress.push(newProg);
+        progressRecord = dbUser.coursesProgress.find((p: any) => p.courseId === courseId);
+      }
+
+      let completedVideosList = progressRecord.completedVideos || [];
+
+      if (completedVideosList.includes(videoSectionTitle)) {
+        completedVideosList = completedVideosList.filter((v: string) => v !== videoSectionTitle);
+      } else {
+        completedVideosList.push(videoSectionTitle);
+      }
+
+      progressRecord.completedVideos = completedVideosList;
+
+      if (totalVideos > 0) {
+        progressRecord.progress = Math.round((completedVideosList.length / totalVideos) * 100);
+      } else {
+        progressRecord.progress = 0;
+      }
+
+      await dbUser.save();
+
+      res.status(200).json({
+        success: true,
+        completedVideos: progressRecord.completedVideos,
+        progress: progressRecord.progress
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));

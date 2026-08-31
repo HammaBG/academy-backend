@@ -1,3 +1,4 @@
+import { verifyGoogleToken } from '../services/google.service';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import bcrypt from 'bcrypt';
@@ -398,5 +399,67 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
   } catch (err) {
     console.error("Reset password error:", err);
     res.status(500).json({ error: "Failed to reset password" });
+  }
+};
+
+// POST /google
+export const googleLogin = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { credential } = req.body;
+    if (!credential) {
+      res.status(400).json({ error: "Google credential token is required" });
+      return;
+    }
+
+    const payload = await verifyGoogleToken(credential);
+    let user = await UserModel.findOne({ email: payload.email });
+
+    if (!user) {
+      // Create user if they do not exist
+      const salt = await bcrypt.genSalt(10);
+      const randomPassword = crypto.randomBytes(16).toString('hex');
+      const hashedPassword = await bcrypt.hash(randomPassword, salt);
+
+      user = new UserModel({
+        email: payload.email,
+        password: hashedPassword,
+        first_name: payload.first_name,
+        last_name: payload.last_name,
+        avatar_url: payload.picture || '',
+        role: 'user',
+      });
+      await user.save();
+
+      // Trigger welcome email
+      sendWelcomeEmail(payload.email, `${payload.first_name} ${payload.last_name}`);
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: user._id.toString(), email: user.email },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.status(200).json({
+      access_token: token,
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        user_metadata: {
+          first_name: user.first_name,
+          last_name: user.last_name,
+          role: user.role,
+          avatar_url: user.avatar_url,
+          phone: user.phone || '',
+          title: user.title || '',
+          bio: user.bio || '',
+          linkedin_url: user.linkedin_url || ''
+        }
+      }
+    });
+  } catch (err) {
+    console.error("Google authentication error:", err);
+    res.status(500).json({ error: err.message || "Google login failed" });
   }
 };
