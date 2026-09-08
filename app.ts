@@ -11,6 +11,7 @@ import courseRoutes from './routes/course.routes';
 import wishlistRoutes from './routes/wishlist.routes';
 import formRoutes from './routes/form.routes';
 import enrollmentCodeRoutes from './routes/enrollmentCode.routes';
+import noteRoutes from './routes/note.routes';
 
 const app = express();
 
@@ -18,7 +19,7 @@ const app = express();
 connectDB();
 
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN 
+  origin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',')
     : ['http://localhost:3000', 'http://localhost:5173'],
   credentials: true,
@@ -53,6 +54,7 @@ app.use('/api/courses', courseRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/forms', formRoutes);
 app.use('/api/enrollment-codes', enrollmentCodeRoutes);
+app.use('/api/notes', noteRoutes);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({
