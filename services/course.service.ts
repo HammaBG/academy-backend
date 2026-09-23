@@ -19,9 +19,16 @@ export const createCourse = CatchAsyncError(async (data: any, res: Response) => 
 export const getAllCoursesService = async (res: Response) => {
   try {
     const courses = await Course.find().sort({ createdAt: -1 });
-    res.status(201).json({
+    const mapped = (courses || []).map((course) => {
+      const doc = course.toObject();
+      return {
+        ...doc,
+        id: doc._id.toString(),
+      };
+    });
+    res.status(200).json({
       success: true,
-      courses,
+      courses: mapped,
     });
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });

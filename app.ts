@@ -12,6 +12,9 @@ import wishlistRoutes from './routes/wishlist.routes';
 import formRoutes from './routes/form.routes';
 import enrollmentCodeRoutes from './routes/enrollmentCode.routes';
 import noteRoutes from './routes/note.routes';
+import chatRoutes from './routes/chat.routes';
+import http from 'http';
+import { initSocketServer } from './config/socket';
 
 const app = express();
 
@@ -55,6 +58,7 @@ app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/forms', formRoutes);
 app.use('/api/enrollment-codes', enrollmentCodeRoutes);
 app.use('/api/notes', noteRoutes);
+app.use('/api/chat', chatRoutes);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({
@@ -73,7 +77,9 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 
 if (process.env.NODE_ENV !== 'test') {
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
+  const server = http.createServer(app);
+initSocketServer(server);
+server.listen(PORT, () => {
     console.log("================================");
     console.log(`?? Server started on port ${PORT}`);
     console.log(`?? Environment: ${process.env.NODE_ENV || 'development'}`);

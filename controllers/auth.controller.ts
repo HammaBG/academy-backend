@@ -157,6 +157,7 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
       user: {
         id: user._id.toString(),
         email: user.email,
+        role: user.role,
         user_metadata: {
           first_name: user.first_name,
           last_name: user.last_name,
@@ -179,9 +180,10 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
 
 export const getProfile = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = req.user;
+  const normalizedUser = user ? { ...user, role: user.role || user.user_metadata?.role } : user;
   res.status(200).json({
     message: 'Authenticated successfully!',
-    user
+    user: normalizedUser
   });
 };
 

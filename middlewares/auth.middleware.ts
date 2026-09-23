@@ -44,6 +44,7 @@ export const requireAuth = async (
     req.user = {
       id: user._id.toString(),
       email: user.email,
+      role: user.role,
       user_metadata: {
         first_name: user.first_name,
         last_name: user.last_name,
@@ -70,7 +71,8 @@ export const isAdmin = async (
 ): Promise<void> => {
   const user = req.user;
 
-  if (!user || user.user_metadata?.role !== 'admin') {
+  const role = user?.role || user?.user_metadata?.role;
+  if (!user || role !== 'admin') {
     res.status(403).json({ error: 'Forbidden: Admin access required' });
     return;
   }
@@ -80,7 +82,7 @@ export const isAdmin = async (
 
 export const authorizeRoles = (...roles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    const userRole = req.user?.user_metadata?.role;
+    const userRole = req.user?.role || req.user?.user_metadata?.role;
     if (!roles.includes(userRole)) {
       res.status(403).json({
         error: `Role: ${userRole} is not allowed to access this resource`,

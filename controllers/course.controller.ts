@@ -8,7 +8,24 @@ import axios from "axios";
 import { createCourseSchema, updateCourseSchema, Course } from "../models/course.model";
 import { User as UserModel } from "../models/user.model";
 import { Category as CategoryModel } from "../models/category.model";
-// Enrollment import removed
+
+// Helper to generate URL-safe slugs from title/name (supports English, numbers, and Arabic characters)
+export const slugifyCourseName = (name: string): string => {
+  if (!name) return "";
+  return name
+    .toString()
+    .trim()
+    .toLowerCase()
+    // Replace spaces and underscores with hyphens
+    .replace(/[\s_]+/g, "-")
+    // Keep letters, Arabic characters (\u0600-\u06FF), numbers, and hyphens
+    .replace(/[^\w\u0600-\u06FF\-]+/g, "")
+    // Replace multiple consecutive hyphens with a single one
+    .replace(/\-\-+/g, "-")
+    // Trim hyphens from beginning and end
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+};
 
 // Helper to fetch instructor data from users table OR Supabase Auth metadata
 const fetchInstructorData = async (userId: string) => {
@@ -29,29 +46,39 @@ const fetchInstructorData = async (userId: string) => {
   }
 };
 
-// Helper to enrich courses with their matching category color dynamically
+// Helper to enrich courses with their matching category color dynamically and ensure URL slug exists
 const enrichCoursesWithCategoryColor = async (courses: any[]): Promise<any[]> => {
   if (!courses || courses.length === 0) return courses;
   try {
     const categories = await CategoryModel.find({}, 'name color');
-    if (categories && categories.length > 0) {
-      const catColorMap = new Map(categories.map(c => [c.name.toLowerCase().trim(), c.color]));
-      return courses.map(course => {
-        const doc = course.toObject ? course.toObject() : course;
-        const catName = (doc.categories || '').toLowerCase().trim();
-        return {
-          ...doc,
-          id: doc._id?.toString() || doc.id,
-          category_color: catColorMap.get(catName) || '#F95353'
-        };
-      });
-    }
+    const catColorMap = categories && categories.length > 0
+      ? new Map(categories.map(c => [c.name.toLowerCase().trim(), c.color]))
+      : new Map();
+
+    return courses.map(course => {
+      const doc = course.toObject ? course.toObject() : course;
+      const catName = (doc.categories || '').toLowerCase().trim();
+      const generatedSlug = doc.url && doc.url.trim() ? doc.url.trim() : slugifyCourseName(doc.name);
+
+      return {
+        ...doc,
+        id: doc._id?.toString() || doc.id,
+        url: generatedSlug,
+        category_color: catColorMap.get(catName) || '#F95353'
+      };
+    });
   } catch (err) {
     console.error('Course category enrichment error:', err);
   }
   return courses.map(c => {
     const doc = c.toObject ? c.toObject() : c;
-    return { ...doc, id: doc._id?.toString() || doc.id, category_color: '#F95353' };
+    const generatedSlug = doc.url && doc.url.trim() ? doc.url.trim() : slugifyCourseName(doc.name);
+    return {
+      ...doc,
+      id: doc._id?.toString() || doc.id,
+      url: generatedSlug,
+      category_color: '#F95353'
+    };
   });
 };
 
@@ -81,6 +108,20 @@ export const uploadCourse = CatchAsyncError(
       }
 
       data.creator = (req as any).user?.id;
+
+      // Auto-generate URL slug if not provided
+      if (!data.url || !data.url.trim()) {
+        const baseSlug = slugifyCourseName(data.name) || `course-${Date.now()}`;
+        // Ensure slug uniqueness
+        let uniqueSlug = baseSlug;
+        let counter = 1;
+        while (await Course.findOne({ url: uniqueSlug })) {
+          uniqueSlug = `${baseSlug}-${counter++}`;
+        }
+        data.url = uniqueSlug;
+      } else {
+        data.url = slugifyCourseName(data.url);
+      }
 
       // Hydrate creator for the immediate response
       const hydratedCreator = await fetchInstructorData(data.creator);
@@ -113,6 +154,8 @@ export const editCourse = CatchAsyncError(
         return next(new ErrorHandler('Course not found', 404));
       }
 
+      const previousUrl = course.url;
+
       const thumbnail = data.thumbnail;
 
       if (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('data:')) {
@@ -130,6 +173,16 @@ export const editCourse = CatchAsyncError(
         };
       }
 
+      if (data.url !== undefined) {
+        if (data.url && data.url.trim()) {
+          data.url = slugifyCourseName(data.url);
+        } else if (data.name || course.name) {
+          data.url = slugifyCourseName(data.name || course.name);
+        }
+      } else if (!course.url && (data.name || course.name)) {
+        data.url = slugifyCourseName(data.name || course.name);
+      }
+
       const parsed = updateCourseSchema.safeParse(data);
       if (!parsed.success) {
         return next(new ErrorHandler(JSON.stringify(parsed.error.format()), 400));
@@ -138,10 +191,13 @@ export const editCourse = CatchAsyncError(
       Object.assign(course, data);
       await course.save();
 
-      // Update Redis
+      // Update Redis for both ID and URLs
       const redisKeyById = `course:${courseId}`;
       await redis.set(redisKeyById, JSON.stringify(course));
 
+      if (previousUrl) {
+        await redis.del(`course:${previousUrl}`);
+      }
       if (course.url) {
         await redis.del(`course:${course.url}`);
       }
@@ -170,24 +226,48 @@ export const getSingleCourse = CatchAsyncError(
 
       const cachedCourse = await redis.get(`course:${courseId}`);
       if (cachedCourse) {
+        const parsed = JSON.parse(cachedCourse);
+        if (parsed && (!parsed.url || !parsed.url.trim())) {
+          parsed.url = slugifyCourseName(parsed.name);
+          await redis.set(`course:${courseId}`, JSON.stringify(parsed), "EX", 604800);
+        }
         return res.status(200).json({
           success: true,
-          course: JSON.parse(cachedCourse),
+          course: parsed,
         });
       }
 
-      // Try finding by URL first, then ID
+      // 1. Try finding by URL
       let course = await Course.findOne({ url: courseId });
 
+      // 2. Try finding by MongoDB ID
+      if (!course && courseId.match(/^[0-9a-fA-F]{24}$/)) {
+        course = await Course.findById(courseId);
+      }
+
+      // 3. Fallback: if course has an empty/unpopulated url or matching slug name, look up courses and match slugify(name)
       if (!course) {
-        // Try finding by MongoDB ID
-        if (courseId.match(/^[0-9a-fA-F]{24}$/)) {
-          course = await Course.findById(courseId);
+        const allCourses = await Course.find();
+        course = allCourses.find((c: any) => {
+          const s = slugifyCourseName(c.url || c.name);
+          return s === courseId || c.url === courseId;
+        }) || null;
+
+        // Auto-save the resolved slug into the course if it was missing
+        if (course && (!course.url || !course.url.trim())) {
+          course.url = slugifyCourseName(course.name) || courseId;
+          await course.save();
         }
       }
 
       if (!course) {
         return next(new ErrorHandler('Course not found', 404));
+      }
+
+      // If course is found by ID and has empty url, ensure url is set
+      if (!course.url || !course.url.trim()) {
+        course.url = slugifyCourseName(course.name);
+        await course.save();
       }
 
       let enrichedCreator = null;
@@ -248,18 +328,31 @@ export const getCourseByUser = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const user = (req as any).user;
-      const courseId = req.params.id;
+      const courseIdParam = req.params.id;
 
-      const course = await Course.findById(courseId);
+      // Find course by URL (slug) or by MongoDB ObjectId
+      let course = await Course.findOne({ url: courseIdParam });
+      if (!course && courseIdParam.match(/^[0-9a-fA-F]{24}$/)) {
+        course = await Course.findById(courseIdParam);
+      }
+      if (!course) {
+        const allCourses = await Course.find();
+        course = allCourses.find((c: any) => {
+          const s = slugifyCourseName(c.url || c.name);
+          return s === courseIdParam || c.url === courseIdParam;
+        }) || null;
+      }
+
       if (!course) {
         return next(new ErrorHandler("Course not found", 404));
       }
 
-      const role = user.user_metadata?.role;
+      const canonicalCourseId = course._id.toString();
+      const role = user.role || user.user_metadata?.role;
       const userId = user.id;
 
       if (role === "admin") {
-        const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
+        const enrichedCourse = { ...course.toObject(), id: canonicalCourseId };
         return res.status(200).json({
           success: true,
           course: enrichedCourse,
@@ -271,11 +364,11 @@ export const getCourseByUser = CatchAsyncError(
         return next(new ErrorHandler("User not found", 404));
       }
 
-      const isEnrolled = dbUser.courses.includes(courseId);
+      const isEnrolled = dbUser.courses.includes(canonicalCourseId) || dbUser.courses.includes(courseIdParam);
 
       if (!isEnrolled) {
-        if (role === "instructor" && course.creator === userId) {
-          const enrichedCourse = { ...course.toObject(), id: course._id.toString() };
+        if (role === "instructor" && String(course.creator) === String(userId)) {
+          const enrichedCourse = { ...course.toObject(), id: canonicalCourseId };
           return res.status(200).json({
             success: true,
             course: enrichedCourse,
@@ -284,11 +377,11 @@ export const getCourseByUser = CatchAsyncError(
         return next(new ErrorHandler("You are not eligible to access this course", 403));
       }
 
-      const progressRecord = dbUser.coursesProgress.find((p: any) => p.courseId === courseId) || { progress: 0, completedVideos: [] };
+      const progressRecord = dbUser.coursesProgress.find((p: any) => p.courseId === canonicalCourseId || p.courseId === courseIdParam) || { progress: 0, completedVideos: [] };
 
-      const enrichedCourse = { 
-        ...course.toObject(), 
-        id: course._id.toString(),
+      const enrichedCourse = {
+        ...course.toObject(),
+        id: canonicalCourseId,
         completedVideos: progressRecord.completedVideos,
         progress: progressRecord.progress
       };
@@ -315,10 +408,10 @@ export const addQuestion = CatchAsyncError(
       }
 
       const courseData = course.course_data || [];
-      const contentIndex = courseData.findIndex((item: any) => 
-        item.id === contentId || 
-        item._id === contentId || 
-        item.title === contentId || 
+      const contentIndex = courseData.findIndex((item: any) =>
+        item.id === contentId ||
+        item._id === contentId ||
+        item.title === contentId ||
         item.video_section === contentId
       );
 
@@ -369,10 +462,10 @@ export const addAnswer = CatchAsyncError(
       }
 
       const courseData = course.course_data || [];
-      const contentIndex = courseData.findIndex((item: any) => 
-        item.id === contentId || 
-        item._id === contentId || 
-        item.title === contentId || 
+      const contentIndex = courseData.findIndex((item: any) =>
+        item.id === contentId ||
+        item._id === contentId ||
+        item.title === contentId ||
         item.video_section === contentId
       );
 
@@ -491,7 +584,7 @@ export const getInstructorCourses = CatchAsyncError(
         return next(new ErrorHandler("Unauthorized", 401));
       }
 
-      const courses = await Course.find({ creator: userId }).sort({ createdAt: -1 });
+      const courses = await Course.find({ $or: [{ creator: userId }, { creator: String(userId) }] }).sort({ createdAt: -1 });
 
       const creatorData = await fetchInstructorData(userId);
 

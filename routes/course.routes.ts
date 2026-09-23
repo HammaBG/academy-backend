@@ -48,7 +48,7 @@ courseRouter.get(
 courseRouter.get(
   "/get-instructor-courses",
   requireAuth,
-  authorizeRoles("instructor"),
+  authorizeRoles("instructor", "admin"),
   getInstructorCourses
 );
 
