@@ -4,6 +4,7 @@ import { z } from 'zod';
 export interface Article {
   id?: string;
   _id?: string;
+  url?: string;
   title: string;
   content: string;
   status: 'draft' | 'published';
@@ -12,6 +13,8 @@ export interface Article {
   category_id?: string;
   category_name?: string;
   category_color?: string;
+  author_id?: string;
+  author_name?: string;
   created_at?: string;
 }
 
@@ -23,6 +26,7 @@ export const createArticleSchema = z.object({
   category_id: z.string().optional(),
   category_name: z.string().optional(),
   category_color: z.string().optional(),
+  url: z.string().optional(),
 });
 
 export const updateArticleSchema = createArticleSchema.partial();
@@ -35,7 +39,10 @@ const ArticleSchema = new Schema({
   image_url: { type: String, default: '' },
   category_id: { type: String, default: '' },
   category_name: { type: String, default: '' },
-  category_color: { type: String, default: '' }
+  category_color: { type: String, default: '' },
+  author_id: { type: String, default: '' },
+  author_name: { type: String, default: '' },
+  url: { type: String, default: '', index: true }
 }, {
   timestamps: true
 });

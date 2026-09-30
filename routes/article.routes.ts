@@ -8,20 +8,20 @@ import {
   updateArticle,
   deleteArticle,
 } from '../controllers/article.controller';
-import { requireAuth, isAdmin } from '../middlewares/auth.middleware';
+import { requireAuth, authorizeRoles } from '../middlewares/auth.middleware';
 import { upload } from '../middlewares/upload.middleware';
 
 const router = Router();
 
-// All article routes require auth + admin
-router.post('/', requireAuth, isAdmin, upload.single('image'), createArticle);
+// Public routes
 router.get('/public', getPublicArticles);
 router.get('/public/:id', getPublicArticleById);
-router.get('/', requireAuth, isAdmin, getAllArticles);
 
-
-router.get('/:id', requireAuth, isAdmin, getArticleById);
-router.put('/:id', requireAuth, isAdmin, upload.single('image'), updateArticle);
-router.delete('/:id', requireAuth, isAdmin, deleteArticle);
+// Protected routes - both admin and instructor can create and manage articles
+router.post('/', requireAuth, authorizeRoles('admin', 'instructor'), upload.single('image'), createArticle);
+router.get('/', requireAuth, authorizeRoles('admin', 'instructor'), getAllArticles);
+router.get('/:id', requireAuth, authorizeRoles('admin', 'instructor'), getArticleById);
+router.put('/:id', requireAuth, authorizeRoles('admin', 'instructor'), upload.single('image'), updateArticle);
+router.delete('/:id', requireAuth, authorizeRoles('admin', 'instructor'), deleteArticle);
 
 export default router;
