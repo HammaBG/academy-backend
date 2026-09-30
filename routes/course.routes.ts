@@ -6,6 +6,9 @@ import {
   deleteCourse,
   editCourse,
   generateVideoUrl,
+  createMuxUploadUrl,
+  getMuxUploadAsset,
+  getMuxPlaybackInfo,
   getAdminAllCourses,
   getAllCourses,
   getCourseByUser,
@@ -63,6 +66,22 @@ courseRouter.put("/add-answer", requireAuth, addAnswer);
 courseRouter.put("/add-review/:id", requireAuth, addReview);
 
 courseRouter.post("/toggle-video-progress", requireAuth, toggleVideoProgress);
+
+courseRouter.post(
+  "/mux/upload-url",
+  requireAuth,
+  authorizeRoles("admin", "instructor"),
+  createMuxUploadUrl
+);
+
+courseRouter.get(
+  "/mux/asset/:uploadId",
+  requireAuth,
+  authorizeRoles("admin", "instructor"),
+  getMuxUploadAsset
+);
+
+courseRouter.get("/mux/playback/:id", getMuxPlaybackInfo);
 
 courseRouter.post("/getVdoCipherOTP", generateVideoUrl);
 

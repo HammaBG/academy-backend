@@ -1,3 +1,4 @@
+import { mux } from '../config/mux';
 import { NextFunction, Request, Response } from "express";
 import { CatchAsyncError } from "../utils/catchAsyncErrors";
 import ErrorHandler from "../utils/ErrorHandler";
@@ -87,7 +88,7 @@ export const uploadCourse = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       let data = req.body;
-      console.log("Incoming Course Data:", data);
+      //console.log("Incoming Course Data:", data);
 
       const parsed = createCourseSchema.safeParse(data);
       if (!parsed.success) {
@@ -805,6 +806,137 @@ export const toggleVideoProgress = CatchAsyncError(
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+
+// Create Mux Direct Upload URL
+export const createMuxUploadUrl = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const upload = await mux.video.uploads.create({
+        cors_origin: '*',
+        new_asset_settings: {
+          playback_policy: ['public'],
+          mp4_support: 'standard',
+        },
+      });
+
+      res.status(200).json({
+        success: true,
+        data: {
+          id: upload.id,
+          url: upload.url,
+          status: upload.status,
+        },
+      });
+    } catch (error: any) {
+      console.error('Mux upload create error:', error);
+      return next(new ErrorHandler(error.message || 'Failed to create Mux upload URL', 500));
+    }
+  }
+);
+
+// Get Mux Upload / Asset Status & Playback ID
+export const getMuxUploadAsset = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { uploadId } = req.params;
+      if (!uploadId) {
+        return next(new ErrorHandler('Upload ID is required', 400));
+      }
+
+      const upload = await mux.video.uploads.retrieve(uploadId as string);
+
+      let playbackId = '';
+      let assetStatus = 'waiting';
+      let duration = 0;
+
+      if (upload.asset_id) {
+        const asset = await mux.video.assets.retrieve(upload.asset_id);
+        assetStatus = asset.status;
+        duration = asset.duration || 0;
+        if (asset.playback_ids && asset.playback_ids.length > 0) {
+          playbackId = asset.playback_ids[0].id;
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          uploadId: upload.id,
+          assetId: upload.asset_id,
+          uploadStatus: upload.status,
+          assetStatus,
+          playbackId,
+          duration,
+        },
+      });
+    } catch (error: any) {
+      console.error('Mux upload asset error:', error);
+      return next(new ErrorHandler(error.message || 'Failed to fetch Mux asset', 500));
+    }
+  }
+);
+
+
+// Public route to resolve videoId / assetId / uploadId to a Mux playback ID
+export const getMuxPlaybackInfo = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return next(new ErrorHandler('Video identifier is required', 400));
+      }
+
+      // 1. If it's already a playback ID, check with Mux or return it
+      try {
+        const playback = await mux.video.playbackIds.retrieve(id);
+        if (playback && playback.id) {
+          return res.status(200).json({
+            success: true,
+            data: { playbackId: playback.id },
+          });
+        }
+      } catch (e) {
+        // Not a playback ID directly, try asset or upload
+      }
+
+      // 2. Try retrieving as Asset ID
+      try {
+        const asset = await mux.video.assets.retrieve(id);
+        if (asset && asset.playback_ids && asset.playback_ids.length > 0) {
+          return res.status(200).json({
+            success: true,
+            data: { playbackId: asset.playback_ids[0].id },
+          });
+        }
+      } catch (e) {
+        // Not an asset ID, try upload ID
+      }
+
+      // 3. Try retrieving as Upload ID
+      try {
+        const upload = await mux.video.uploads.retrieve(id);
+        if (upload && upload.asset_id) {
+          const asset = await mux.video.assets.retrieve(upload.asset_id);
+          if (asset && asset.playback_ids && asset.playback_ids.length > 0) {
+            return res.status(200).json({
+              success: true,
+              data: { playbackId: asset.playback_ids[0].id },
+            });
+          }
+        }
+      } catch (e) { }
+
+      res.status(404).json({
+        success: false,
+        error: 'Mux playback ID not found for this identifier',
+      });
+    } catch (err: any) {
+      console.error('getMuxPlaybackInfo error:', err);
+      res.status(500).json({ error: 'Failed to resolve Mux video' });
     }
   }
 );

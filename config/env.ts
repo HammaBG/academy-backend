@@ -13,6 +13,8 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
   VDOCIPHER_API_SECRET: z.string().min(1),
+  MUX_TOKEN_ID: z.string().optional(),
+  MUX_TOKEN_SECRET: z.string().optional(),
 });
 
 const _env = envSchema.safeParse(process.env);
