@@ -32,6 +32,7 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
     const users = dbUsers.map(u => ({
       id: u._id.toString(),
       email: u.email,
+      role: u.role,
       user_metadata: {
         first_name: u.first_name,
         last_name: u.last_name,
@@ -232,6 +233,22 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
   } catch (err) {
     console.error("Update User Error:", err);
     res.status(500).json({ error: 'Failed to update user' });
+  }
+};
+
+
+export const deleteUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const user = await UserModel.findByIdAndDelete(id);
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    res.status(200).json({ message: 'User deleted successfully' });
+  } catch (err) {
+    console.error("Delete User Error:", err);
+    res.status(500).json({ error: 'Failed to delete user' });
   }
 };
 

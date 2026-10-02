@@ -5,7 +5,8 @@ import {
   signIn, 
   getProfile, 
   getAllUsers, 
-  updateUser, 
+  updateUser,
+  deleteUser, 
   getPublicInstructors, 
   updateProfile, 
   getInstructorById,
@@ -32,5 +33,6 @@ router.put('/update-profile', requireAuth as any, updateProfile as any);
 // Admin-only routes
 router.get('/users', requireAuth as any, isAdmin as any, getAllUsers);
 router.put('/users/:id', requireAuth as any, isAdmin as any, updateUser);
+router.delete('/users/:id', requireAuth as any, isAdmin as any, deleteUser);
 
 export default router;
