@@ -14,6 +14,7 @@ import enrollmentCodeRoutes from './routes/enrollmentCode.routes';
 import noteRoutes from './routes/note.routes';
 import chatRoutes from './routes/chat.routes';
 import ticketRoutes from './routes/ticket.routes';
+import preRegistrationRoutes from './routes/preRegistration.routes';
 import http from 'http';
 import { initSocketServer } from './config/socket';
 
@@ -61,6 +62,7 @@ app.use('/api/enrollment-codes', enrollmentCodeRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/tickets', ticketRoutes);
+app.use('/api/pre-registrations', preRegistrationRoutes);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({

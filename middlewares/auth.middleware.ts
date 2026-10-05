@@ -92,3 +92,36 @@ export const authorizeRoles = (...roles: string[]) => {
     next();
   };
 };
+
+export const optionalAuth = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const JWT_SECRET = process.env.JWT_SECRET || "d3d8c11e7401d4b6cbdeca781938fae6eb5b01859bf5db0e97d4c2b9a71bcf23";
+      try {
+        const decoded: any = jwt.verify(token, JWT_SECRET);
+        if (decoded && decoded.id) {
+          const user = await UserModel.findById(decoded.id);
+          if (user) {
+            req.user = {
+              id: user._id.toString(),
+              _id: user._id,
+              email: user.email,
+              role: user.role,
+            };
+          }
+        }
+      } catch (e) {
+        // Token invalid, proceed as guest
+      }
+    }
+    next();
+  } catch (err) {
+    next();
+  }
+};

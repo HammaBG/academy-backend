@@ -7,6 +7,8 @@ import { createCourse, getAllCoursesService } from "../services/course.service";
 import { redis } from "../config/redis";
 import axios from "axios";
 import { createCourseSchema, updateCourseSchema, Course } from "../models/course.model";
+import { PreRegistration } from "../models/preRegistration.model";
+import { sendCourseReadyNotificationEmail } from "../services/email.service";
 import { User as UserModel } from "../models/user.model";
 import { Category as CategoryModel } from "../models/category.model";
 
@@ -156,6 +158,7 @@ export const editCourse = CatchAsyncError(
       }
 
       const previousUrl = course.url;
+      const wasNotReady = !course.ready;
 
       const thumbnail = data.thumbnail;
 
@@ -191,6 +194,48 @@ export const editCourse = CatchAsyncError(
 
       Object.assign(course, data);
       await course.save();
+
+      // Check if course transitioned to ready (trigger notifications for pre-registered users)
+      if (wasNotReady && (course.ready === true || data.ready === true)) {
+        (async () => {
+          try {
+            console.log(`[PreRegistration] Course "${course.name}" marked as ready. Finding pre-registered users...`);
+            const pendingRegs = await PreRegistration.find({
+              courseId: course._id,
+              status: "pending",
+            });
+
+            console.log(`[PreRegistration] Found ${pendingRegs.length} pending pre-registrations for course "${course.name}"`);
+
+            for (const reg of pendingRegs) {
+              try {
+                const discountPercent = course.preregistration_discount || 0;
+                const finalDiscountedPrice = discountPercent > 0
+                  ? Math.round(course.price * (1 - discountPercent / 100))
+                  : course.price;
+
+                await sendCourseReadyNotificationEmail(
+                  reg.email,
+                  reg.fullName,
+                  course.name,
+                  course.url || course._id.toString(),
+                  course.price,
+                  discountPercent,
+                  finalDiscountedPrice
+                );
+                reg.status = "notified";
+                reg.notifiedAt = new Date();
+                await reg.save();
+                console.log(`[PreRegistration] Notification email sent and updated for ${reg.email}`);
+              } catch (emailErr: any) {
+                console.error(`[PreRegistration] Failed to notify ${reg.email}:`, emailErr.message);
+              }
+            }
+          } catch (notifErr: any) {
+            console.error("[PreRegistration Notification Error]:", notifErr.message);
+          }
+        })();
+      }
 
       // Update Redis for both ID and URLs
       const redisKeyById = `course:${courseId}`;

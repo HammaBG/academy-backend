@@ -64,6 +64,7 @@ export interface ICourse {
   categories: string;
   price: number;
   estimated_price?: number;
+  preregistration_discount?: number;
   thumbnail: {
     public_id: string;
     url: string;
@@ -96,6 +97,7 @@ export const createCourseSchema = z.object({
   categories: z.string().min(1, "Categories are required"),
   price: z.coerce.number().optional(),
   estimated_price: z.coerce.number().optional(),
+  preregistration_discount: z.coerce.number().min(0).max(100).optional().default(0),
   thumbnail: z.object({
     public_id: z.string().optional(),
     url: z.string().optional(),
@@ -160,6 +162,7 @@ const CourseSchema = new Schema({
   categories: { type: String, required: true },
   price: { type: Number, default: 0 },
   estimated_price: { type: Number, default: 0 },
+  preregistration_discount: { type: Number, default: 0 },
   thumbnail: {
     public_id: { type: String, default: "" },
     url: { type: String, default: "" }
