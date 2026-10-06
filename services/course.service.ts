@@ -18,14 +18,17 @@ export const createCourse = CatchAsyncError(async (data: any, res: Response) => 
 // Get All Courses Service
 export const getAllCoursesService = async (res: Response) => {
   try {
-    const courses = await Course.find().sort({ createdAt: -1 });
-    const mapped = (courses || []).map((course) => {
-      const doc = course.toObject();
-      return {
-        ...doc,
-        id: doc._id.toString(),
-      };
-    });
+    // Exclude heavy course_data payload when listing all courses for admin
+    const courses = await Course.find()
+      .select("-course_data")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const mapped = (courses || []).map((course: any) => ({
+      ...course,
+      id: course._id ? course._id.toString() : course.id,
+    }));
+
     res.status(200).json({
       success: true,
       courses: mapped,
