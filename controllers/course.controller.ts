@@ -342,7 +342,7 @@ export const getSingleCourse = CatchAsyncError(
 export const getAllCourses = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const courses = await Course.find({ status: true }).sort({ ready: 1 });
+      const courses = await Course.find({ status: true }).sort({ display_order: 1, ready: 1, createdAt: -1 });
 
       const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
         if (course.creator && typeof course.creator === 'string') {
@@ -982,6 +982,36 @@ export const getMuxPlaybackInfo = CatchAsyncError(
     } catch (err: any) {
       console.error('getMuxPlaybackInfo error:', err);
       res.status(500).json({ error: 'Failed to resolve Mux video' });
+    }
+  }
+);
+
+// reorder courses (admin)
+export const reorderCourses = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { orders } = req.body; // array of { id: string, display_order: number }
+      if (!Array.isArray(orders)) {
+        return next(new ErrorHandler("Orders array is required", 400));
+      }
+
+      const bulkOps = orders.map((item: { id: string; display_order: number }) => ({
+        updateOne: {
+          filter: { _id: item.id },
+          update: { $set: { display_order: Number(item.display_order) || 0 } },
+        },
+      }));
+
+      if (bulkOps.length > 0) {
+        await Course.bulkWrite(bulkOps);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Courses reordered successfully",
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
     }
   }
 );

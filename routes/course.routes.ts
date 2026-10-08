@@ -17,7 +17,8 @@ import {
   getSingleCourse,
   uploadCourse,
   assignCourseToUser,
-  toggleVideoProgress
+  toggleVideoProgress,
+  reorderCourses
 } from "../controllers/course.controller";
 import { authorizeRoles, requireAuth } from "../middlewares/auth.middleware";
 
@@ -35,6 +36,13 @@ courseRouter.put(
   requireAuth,
   authorizeRoles("admin", "instructor"),
   editCourse
+);
+
+courseRouter.put(
+  "/reorder-courses",
+  requireAuth,
+  authorizeRoles("admin"),
+  reorderCourses
 );
 
 courseRouter.get("/get-course/:id", getSingleCourse);

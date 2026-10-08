@@ -21,7 +21,7 @@ export const getAllCoursesService = async (res: Response) => {
     // Exclude heavy course_data payload when listing all courses for admin
     const courses = await Course.find()
       .select("-course_data")
-      .sort({ createdAt: -1 })
+      .sort({ display_order: 1, createdAt: -1 })
       .lean();
 
     const mapped = (courses || []).map((course: any) => ({
