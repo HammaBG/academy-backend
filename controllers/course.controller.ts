@@ -131,6 +131,7 @@ export const uploadCourse = CatchAsyncError(
 
       const course = new Course(data);
       await course.save();
+      await redis.del("courses:public:all");
 
       const [enrichedCourse] = await enrichCoursesWithCategoryColor([course]);
 
@@ -247,6 +248,7 @@ export const editCourse = CatchAsyncError(
       if (course.url) {
         await redis.del(`course:${course.url}`);
       }
+      await redis.del("courses:public:all");
 
       // Hydrate for immediate response
       const hydratedCreator = await fetchInstructorData(course.creator);
@@ -338,26 +340,86 @@ export const getSingleCourse = CatchAsyncError(
   }
 );
 
-// get all courses --- without purchasing
+// get all courses --- without purchasing (Cached in Redis + Lean + Excluded heavy fields)
 export const getAllCourses = CatchAsyncError(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const courses = await Course.find({ status: true }).sort({ display_order: 1, ready: 1, createdAt: -1 });
-
-      const hydratedCourses = await Promise.all((courses || []).map(async (course) => {
-        if (course.creator && typeof course.creator === 'string') {
-          const doc = course.toObject();
-          return {
-            ...doc,
-            id: doc._id.toString(),
-            creator: await fetchInstructorData(course.creator)
-          };
+      // 1. Try serving from Redis cache for sub-10ms response
+      try {
+        const cached = await redis.get("courses:public:all");
+        if (cached) {
+          return res.status(200).json({
+            success: true,
+            courses: JSON.parse(cached),
+          });
         }
-        const doc = course.toObject();
-        return { ...doc, id: doc._id.toString() };
-      }));
+      } catch (cacheErr) {
+        console.error("Redis get courses:public:all error:", cacheErr);
+      }
+
+      // 2. Query MongoDB excluding heavy course_data array
+      const courses = await Course.find({ status: true })
+        .select("-course_data")
+        .sort({ display_order: 1, ready: 1, createdAt: -1 })
+        .lean();
+
+      // 3. Batch fetch all unique instructors in a single query (solves N+1 query problem)
+      const creatorIds = Array.from(
+        new Set(
+          (courses || [])
+            .map((c: any) => c.creator)
+            .filter((id): id is string => typeof id === "string" && Boolean(id.trim()))
+        )
+      );
+
+      const instructors = creatorIds.length > 0
+        ? await UserModel.find(
+            { _id: { $in: creatorIds } },
+            "first_name last_name avatar_url title"
+          ).lean()
+        : [];
+
+      const instructorMap = new Map(
+        instructors.map((inst: any) => [
+          inst._id.toString(),
+          {
+            id: inst._id.toString(),
+            first_name: inst.first_name,
+            last_name: inst.last_name,
+            avatar_url: inst.avatar_url,
+            title: inst.title || "Senior Expert",
+          },
+        ])
+      );
+
+      const defaultInstructor = {
+        first_name: "Academy",
+        last_name: "Instructor",
+        title: "Senior Expert",
+        avatar_url: "",
+      };
+
+      const hydratedCourses = (courses || []).map((c: any) => {
+        const id = c._id?.toString() || c.id;
+        let creator = c.creator;
+        if (typeof creator === "string") {
+          creator = instructorMap.get(creator) || { ...defaultInstructor, id: creator };
+        }
+        return {
+          ...c,
+          id,
+          creator,
+        };
+      });
 
       const enrichedCourses = await enrichCoursesWithCategoryColor(hydratedCourses);
+
+      // 4. Cache in Redis for 2 hours (auto-invalidated on create/edit/delete/reorder)
+      try {
+        await redis.set("courses:public:all", JSON.stringify(enrichedCourses), "EX", 7200);
+      } catch (cacheSetErr) {
+        console.error("Redis set courses:public:all error:", cacheSetErr);
+      }
 
       res.status(200).json({
         success: true,
@@ -665,6 +727,7 @@ export const deleteCourse = CatchAsyncError(
       }
 
       await redis.del(`course:${id}`);
+      await redis.del("courses:public:all");
 
       res.status(200).json({
         success: true,
