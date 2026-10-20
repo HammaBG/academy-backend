@@ -15,6 +15,7 @@ import noteRoutes from './routes/note.routes';
 import chatRoutes from './routes/chat.routes';
 import ticketRoutes from './routes/ticket.routes';
 import preRegistrationRoutes from './routes/preRegistration.routes';
+import couponRoutes from './routes/coupon.routes';
 import http from 'http';
 import { initSocketServer } from './config/socket';
 
@@ -53,11 +54,12 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/courses', courseRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/categories', categoryRoutes);
-app.use('/api/courses', courseRoutes);
 app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/forms', formRoutes);
+app.use('/api/coupons', couponRoutes);
 app.use('/api/enrollment-codes', enrollmentCodeRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/chat', chatRoutes);
@@ -82,8 +84,8 @@ app.use((err: any, req: Request, res: Response, next: any) => {
 if (process.env.NODE_ENV !== 'test') {
   const PORT = process.env.PORT || 5000;
   const server = http.createServer(app);
-initSocketServer(server);
-server.listen(PORT, () => {
+  initSocketServer(server);
+  server.listen(PORT, () => {
     console.log("================================");
     console.log(`?? Server started on port ${PORT}`);
     console.log(`?? Environment: ${process.env.NODE_ENV || 'development'}`);
