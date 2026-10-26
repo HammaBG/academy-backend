@@ -18,6 +18,7 @@ import {
   uploadCourse,
   assignCourseToUser,
   toggleVideoProgress,
+  videoHeartbeat,
   reorderCourses
 } from "../controllers/course.controller";
 import { authorizeRoles, requireAuth } from "../middlewares/auth.middleware";
@@ -74,6 +75,7 @@ courseRouter.put("/add-answer", requireAuth, addAnswer);
 courseRouter.put("/add-review/:id", requireAuth, addReview);
 
 courseRouter.post("/toggle-video-progress", requireAuth, toggleVideoProgress);
+courseRouter.post("/video-heartbeat", requireAuth, videoHeartbeat);
 
 courseRouter.post(
   "/mux/upload-url",

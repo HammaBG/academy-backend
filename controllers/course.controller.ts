@@ -491,6 +491,9 @@ export const getCourseByUser = CatchAsyncError(
         ...course.toObject(),
         id: canonicalCourseId,
         completedVideos: progressRecord.completedVideos,
+        lessonsProgress: (progressRecord as any).lessons || [],
+        totalWatchedSeconds: (progressRecord as any).totalWatchedSeconds || 0,
+        watchLog: ((dbUser as any).watchLog || []).slice(-14),
         progress: progressRecord.progress
       };
       return res.status(200).json({
@@ -836,6 +839,8 @@ export const getEnrolledCourses = CatchAsyncError(
           id: doc._id.toString(),
           creator: creatorData,
           completedVideos: progressRecord.completedVideos,
+          lessonsProgress: (progressRecord as any).lessons || [],
+          totalWatchedSeconds: (progressRecord as any).totalWatchedSeconds || 0,
           progress: progressRecord.progress
         };
       }));
@@ -1072,6 +1077,83 @@ export const reorderCourses = CatchAsyncError(
       res.status(200).json({
         success: true,
         message: "Courses reordered successfully",
+      });
+    } catch (error: any) {
+      return next(new ErrorHandler(error.message, 500));
+    }
+  }
+);
+
+
+// Video heartbeat: saves resume position + real watched seconds, auto-completes at 85%
+export const videoHeartbeat = CatchAsyncError(
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { courseId, lessonKey } = req.body as { courseId?: string; lessonKey?: string };
+      const position = Math.max(0, Number(req.body.position) || 0);
+      const duration = Math.max(0, Number(req.body.duration) || 0);
+      const watchedDelta = Math.min(60, Math.max(0, Number(req.body.watchedDelta) || 0));
+      const userId = (req as any).user?.id;
+      if (!userId) return next(new ErrorHandler("Unauthorized", 401));
+      if (!courseId || !lessonKey) return next(new ErrorHandler("courseId and lessonKey are required", 400));
+
+      const dbUser: any = await UserModel.findById(userId);
+      if (!dbUser) return next(new ErrorHandler("User not found", 404));
+      const isEnrolled = (dbUser.courses || []).some((cid: any) => cid?.toString() === courseId);
+      if (!isEnrolled) return next(new ErrorHandler("Not enrolled in this course", 403));
+
+      if (!dbUser.coursesProgress) dbUser.coursesProgress = [];
+      let record = dbUser.coursesProgress.find((p: any) => p.courseId === courseId);
+      if (!record) {
+        dbUser.coursesProgress.push({ courseId, progress: 0, completedVideos: [], lessons: [], totalWatchedSeconds: 0 });
+        record = dbUser.coursesProgress.find((p: any) => p.courseId === courseId);
+      }
+      if (!record.lessons) record.lessons = [];
+      let lesson = record.lessons.find((l: any) => l.lessonKey === lessonKey);
+      if (!lesson) {
+        record.lessons.push({ lessonKey, lastPosition: 0, duration: 0, watchedSeconds: 0, completed: false });
+        lesson = record.lessons.find((l: any) => l.lessonKey === lessonKey);
+      }
+
+      const cap = duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+      lesson.lastPosition = Math.min(position, cap);
+      if (duration > 0) lesson.duration = duration;
+      lesson.watchedSeconds = Math.min((lesson.watchedSeconds || 0) + watchedDelta, cap);
+      lesson.updatedAt = new Date();
+      record.totalWatchedSeconds = (record.totalWatchedSeconds || 0) + watchedDelta;
+
+      if (watchedDelta > 0) {
+        const today = new Date().toISOString().slice(0, 10);
+        if (!dbUser.watchLog) dbUser.watchLog = [];
+        const entry = dbUser.watchLog.find((w: any) => w.date === today);
+        if (entry) entry.seconds += watchedDelta;
+        else dbUser.watchLog.push({ date: today, seconds: watchedDelta });
+        if (dbUser.watchLog.length > 60) dbUser.watchLog = dbUser.watchLog.slice(-60);
+      }
+
+      let justCompleted = false;
+      const ratio = lesson.duration > 0 ? lesson.watchedSeconds / lesson.duration : 0;
+      if (!lesson.completed && ratio >= 0.85) {
+        lesson.completed = true;
+        if (!record.completedVideos.includes(lessonKey)) {
+          record.completedVideos.push(lessonKey);
+          justCompleted = true;
+        }
+        const course: any = await Course.findById(courseId).select("course_data._id");
+        const total = course?.course_data?.length || 0;
+        record.progress = total > 0 ? Math.min(100, Math.round((record.completedVideos.length / total) * 100)) : 0;
+      }
+
+      dbUser.markModified("coursesProgress");
+      await dbUser.save();
+
+      res.status(200).json({
+        success: true,
+        lesson,
+        justCompleted,
+        completedVideos: record.completedVideos,
+        progress: record.progress,
+        totalWatchedSeconds: record.totalWatchedSeconds
       });
     } catch (error: any) {
       return next(new ErrorHandler(error.message, 500));
