@@ -17,6 +17,9 @@ interface AuthenticatedSocket extends Socket {
 
 const activeCourseUsers = new Map<string, Map<string, { id: string; name: string; avatar: string; role: string }>>();
 
+let ioInstance: SocketIOServer | null = null;
+export const getIO = (): SocketIOServer | null => ioInstance;
+
 export const initSocketServer = (httpServer: HttpServer) => {
   const io = new SocketIOServer(httpServer, {
     cors: {
@@ -290,5 +293,6 @@ export const initSocketServer = (httpServer: HttpServer) => {
     });
   });
 
+  ioInstance = io;
   return io;
 };
